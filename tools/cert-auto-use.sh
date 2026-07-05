@@ -9,7 +9,7 @@ OUT_ENV="${5:-}"
 POOL_DIR="/etc/mihomo-anytls/cert-pool"
 
 info(){ printf '[INFO] %s\n' "$*"; }
-warn(){ printf '[WARN] %s\n' "$*"; }
+warn(){ printf '[WARN] %s\n' "$*" >&2; }
 err(){ printf '[ERR ] %s\n' "$*" >&2; }
 safe_name(){ printf '%s' "$1" | sed 's#[^A-Za-z0-9._-]#_#g'; }
 now_utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ'; }
