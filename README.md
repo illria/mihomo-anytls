@@ -17,6 +17,8 @@
   - sing-box `1.11.x`：Hysteria2 / TUIC / Trojan TLS
   - sing-box `1.12.0+`：AnyTLS / Hysteria2 / TUIC / Trojan TLS
 - mihomo：AnyTLS listener
+- 目标输出：安装完成后应输出 URI 分享链接，例如 `anytls://password@example.com:443?peer=example.com&insecure=0&sni=example.com#node-name`
+- 节点信息查看：支持读取本机历史安装记录、配置文件路径、分享链接和运行状态
 
 ## 快速使用
 
@@ -37,6 +39,50 @@ curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.s
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh)"
 ```
+
+## 查看本机已安装节点
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/show-node-info.sh | bash
+```
+
+如果你已经克隆仓库，也可以运行：
+
+```bash
+bash tools/show-node-info.sh
+```
+
+节点查看脚本会优先读取：
+
+```text
+/etc/mihomo/install.env
+/etc/sing-box/install.env
+/etc/mihomo-anytls/nodes.tsv
+```
+
+## 分享链接格式
+
+AnyTLS 目标输出格式：
+
+```text
+anytls://PASSWORD@DOMAIN:PORT?peer=DOMAIN&insecure=0&sni=DOMAIN#NODE_NAME
+```
+
+示例：
+
+```text
+anytls://96a8a7b5-4c4c-4f57-af2c-ecff73fdcd38@hostdzire.2004103.xyz:22064?peer=hostdzire.2004103.xyz&insecure=0&sni=hostdzire.2004103.xyz#hostdzire-20u-印度
+```
+
+说明：
+
+- `PASSWORD` 对应 AnyTLS 密码。
+- `DOMAIN` 是你的域名。
+- `PORT` 是监听端口。
+- `peer` 和 `sni` 默认等于域名。
+- `insecure=0` 表示正常校验证书。
+- 使用自签证书时应为 `insecure=1`。
+- `NODE_NAME` 是节点备注。
 
 ## 推荐组合
 
@@ -64,6 +110,7 @@ mihomo 模式：
 /etc/mihomo/config.yaml
 /etc/mihomo/client-anytls-mihomo.yaml
 /etc/mihomo/client-anytls-sing-box.json
+/etc/mihomo/share-link.txt
 /etc/mihomo/certs/fullchain.pem
 /etc/mihomo/certs/key.pem
 ```
@@ -74,8 +121,15 @@ sing-box 模式：
 /etc/sing-box/config.json
 /etc/sing-box/client-<protocol>-mihomo.yaml
 /etc/sing-box/client-<protocol>-sing-box.json
+/etc/sing-box/share-link.txt
 /etc/sing-box/certs/fullchain.pem
 /etc/sing-box/certs/key.pem
+```
+
+全局历史记录：
+
+```text
+/etc/mihomo-anytls/nodes.tsv
 ```
 
 ## 查看日志
