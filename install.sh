@@ -94,11 +94,24 @@ download_file() {
   chmod +x "$out"
 }
 
+patch_main_installer() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  grep -q '检测本地证书并选择路径复用' "$f" && return 0
+
+  sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"#' "$f" || true
+  sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
+  sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac#' "$f" || true
+}
+
 run_remote_script() {
   local url="$1" f
   shift || true
   f="$(make_tmp)"
   download_file "$url" "$f"
+  if [ "$url" = "$MAIN_URL" ]; then
+    patch_main_installer "$f"
+  fi
   if [ -r /dev/tty ] && [ -w /dev/tty ]; then
     bash "$f" "$@" < /dev/tty
   else
