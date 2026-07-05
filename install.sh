@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-cert-center-menu-v1"
+INSTALLER_VERSION="2026-07-06-eianun-en-mi-ssl-manager-v1"
+AUTHOR="Eianun"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
 NGINX_URL="$BASE_URL/tools/install-nginx-static-site.sh"
 CERT_AUTO_URL="$BASE_URL/tools/cert-auto-use.sh"
 CERT_CENTER_URL="$BASE_URL/tools/cert-center.sh"
+SSL_MANAGER_URL="$BASE_URL/tools/ssl-manager.sh"
 CERT_POOL_URL="$BASE_URL/tools/cert-pool.sh"
 OUTBOUND_URL="$BASE_URL/tools/configure-outbound-proxy.sh"
 SELF_UPDATE_URL="$BASE_URL/tools/self-update.sh"
 UNINSTALL_URL="$BASE_URL/tools/uninstall.sh"
+BIN_MAIN="/usr/local/bin/mihomo-anytls"
+BIN_SHORT="/usr/local/bin/en-mi"
 TMP_FILES=""
 PKG_MANAGER="unknown"
 
@@ -109,6 +113,16 @@ download_file(){
     exit 1
   fi
   chmod +x "$out"
+}
+
+install_shortcuts(){
+  local tmp
+  [ -w /usr/local/bin ] || return 0
+  tmp="$(make_tmp)"
+  if download_file "$BASE_URL/install.sh" "$tmp" >/dev/null 2>&1; then
+    install -m 755 "$tmp" "$BIN_MAIN" 2>/dev/null || true
+    install -m 755 "$tmp" "$BIN_SHORT" 2>/dev/null || true
+  fi
 }
 
 patch_main_installer(){
@@ -233,6 +247,9 @@ summary(){
 }
 '''
 s = re.sub(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
+
+s = re.sub(r'compose_up\(\)\{.*?\n\}', 'compose_up(){ if docker compose version >/dev/null 2>&1; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up -d --build); elif has docker-compose; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up -d --build); else return 1; fi; }\n\ndocker_build_image(){ (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 docker build -t "$IMAGE_NAME" .) || DOCKER_BUILDKIT=0 docker build --no-cache -t "$IMAGE_NAME" "$WORK_DIR"; }', s, flags=re.S)
+s = s.replace('docker build -t "$IMAGE_NAME" "$WORK_DIR"', 'docker_build_image || die "Docker 镜像构建失败：当前 VPS 的 Docker/procfs 可能不支持 build，请改用裸机 systemd 模式"')
 s = s.replace('choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; collect_inputs; choose_cert; write_config', 'choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; choose_cert_mode; collect_inputs; choose_cert; write_config')
 s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
 open(p, 'w', encoding='utf-8').write(s)
@@ -251,7 +268,12 @@ run_remote_script(){
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
 show_nodes(){ run_remote_script "$SHOW_URL"; }
 install_nginx_site(){ run_remote_script "$NGINX_URL"; }
-certificate_center(){ run_remote_script "$CERT_CENTER_URL"; }
+ssl_manager(){ run_remote_script "$SSL_MANAGER_URL" "$@"; }
+certificate_center(){ ssl_manager; }
+manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
+configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
+manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
+uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
 repair_local_cert(){
   local domain core target_cert target_key
@@ -265,11 +287,6 @@ repair_local_cert(){
   esac
   run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"
 }
-
-manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
-configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
-manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
-uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
 service_status(){
   echo "============================================================"
@@ -286,7 +303,7 @@ service_status(){
   [ -f /etc/cron.d/mihomo-anytls-cert-renew ] && cat /etc/cron.d/mihomo-anytls-cert-renew || echo "  未安装"
   echo
   echo "端口监听："
-  if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090)\b' || echo "  未发现 80/443/7890/9090 监听"; fi
+  if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090|:22077|:32077|:42077)\b' || echo "  未发现常用端口监听"; fi
 }
 
 restart_services(){
@@ -305,6 +322,8 @@ menu(){
   local action
   echo "============================================================"
   echo " mihomo-anytls 统一管理菜单"
+  echo " 作者: $AUTHOR"
+  echo " 快捷命令: en-mi"
   echo " 版本: $INSTALLER_VERSION"
   echo "============================================================"
   echo "请选择操作："
@@ -313,7 +332,7 @@ menu(){
   echo "  3) 安装 / 更新 Nginx 静态站"
   echo "  4) 查看服务状态"
   echo "  5) 重启服务"
-  echo "  6) 证书中心（状态清单 / 强制续期 / 同步）"
+  echo "  6) SSL Manager（证书申请 / 安装 / 续期 / 同步）"
   echo "  7) 多节点证书池管理"
   echo "  8) 配置 HTTP / SOCKS5 出口代理"
   echo "  9) 自动更新脚本管理"
@@ -327,7 +346,7 @@ menu(){
     3) install_nginx_site ;;
     4) service_status ;;
     5) restart_services ;;
-    6) certificate_center ;;
+    6) ssl_manager ;;
     7) manage_cert_pool ;;
     8) configure_outbound ;;
     9) manage_self_update ;;
@@ -339,11 +358,13 @@ menu(){
 
 main(){
   need_root
+  install_shortcuts || true
   case "${1:-}" in
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
     --nginx|nginx|site) install_nginx_site ;;
-    --cert|cert|certificate|cert-center) certificate_center ;;
+    --ssl|ssl|ssl-manager|ssl-manager) ssl_manager ;;
+    --cert|cert|certificate|cert-center) ssl_manager ;;
     --repair-cert|repair-cert) repair_local_cert ;;
     --cert-pool|cert-pool|pool) manage_cert_pool ;;
     --outbound|outbound|proxy) configure_outbound ;;
