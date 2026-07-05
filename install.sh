@@ -5,6 +5,8 @@ BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
 NGINX_URL="$BASE_URL/tools/install-nginx-static-site.sh"
+CERT_URL="$BASE_URL/tools/cert-finder.sh"
+OUTBOUND_URL="$BASE_URL/tools/configure-outbound-proxy.sh"
 TMP_FILES=""
 PKG_MANAGER="unknown"
 
@@ -117,6 +119,14 @@ install_nginx_site() {
   run_remote_script "$NGINX_URL"
 }
 
+find_local_cert() {
+  run_remote_script "$CERT_URL"
+}
+
+configure_outbound() {
+  run_remote_script "$OUTBOUND_URL"
+}
+
 service_status() {
   echo "============================================================"
   echo " 服务状态"
@@ -203,6 +213,8 @@ menu() {
   echo "  3) 安装 / 更新 Nginx 静态站"
   echo "  4) 查看服务状态"
   echo "  5) 重启服务"
+  echo "  6) 检测本地证书有效期"
+  echo "  7) 配置 HTTP / SOCKS5 出口代理"
   echo "  0) 退出"
   read -r -p "输入序号 [1]: " action
   action="${action:-1}"
@@ -213,6 +225,8 @@ menu() {
     3) install_nginx_site ;;
     4) service_status ;;
     5) restart_services ;;
+    6) find_local_cert ;;
+    7) configure_outbound ;;
     0) exit 0 ;;
     *) echo "无效操作：$action" >&2; exit 1 ;;
   esac
@@ -224,6 +238,8 @@ main() {
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
     --nginx|nginx|site) install_nginx_site ;;
+    --cert|cert|certificate) find_local_cert ;;
+    --outbound|outbound|proxy) configure_outbound ;;
     --status|status) service_status ;;
     --restart|restart) restart_services ;;
     "") menu ;;
