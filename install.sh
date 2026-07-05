@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+INSTALLER_VERSION="2026-07-06-cert-menu-patch-v2"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
@@ -82,11 +83,13 @@ make_tmp() {
 }
 
 download_file() {
-  local url="$1" out="$2"
+  local url="$1" out="$2" sep="?" busted=""
+  case "$url" in *\?*) sep="&";; esac
+  busted="${url}${sep}t=$(date +%s)"
   if has curl; then
-    curl -fsSL "$url" -o "$out"
+    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
   elif has wget; then
-    wget -qO "$out" "$url"
+    wget --no-cache -qO "$out" "$busted"
   else
     echo "缺少 curl/wget，请先安装其中一个。" >&2
     exit 1
@@ -99,9 +102,21 @@ patch_main_installer() {
   [ -f "$f" ] || return 0
   grep -q '检测本地证书并选择路径复用' "$f" && return 0
 
-  sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"#' "$f" || true
-  sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
-  sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac#' "$f" || true
+  python3 - "$f" <<'PY' 2>/dev/null || true
+import sys
+p = sys.argv[1]
+s = open(p, 'r', encoding='utf-8').read()
+s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"')
+s = s.replace('read -r -p "输入序号 [4]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}', 'read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}')
+s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac')
+open(p, 'w', encoding='utf-8').write(s)
+PY
+
+  if ! grep -q '检测本地证书并选择路径复用' "$f"; then
+    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"#' "$f" || true
+    sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
+    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac#' "$f" || true
+  fi
 }
 
 run_remote_script() {
@@ -219,6 +234,7 @@ menu() {
   local action
   echo "============================================================"
   echo " mihomo-anytls 管理菜单"
+  echo " 版本: $INSTALLER_VERSION"
   echo "============================================================"
   echo "请选择操作："
   echo "  1) 安装 / 更新节点"
