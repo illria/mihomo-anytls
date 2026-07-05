@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-cert-auto-sync-v1"
+INSTALLER_VERSION="2026-07-06-unified-menu-cert-auto-repair-v1"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
 NGINX_URL="$BASE_URL/tools/install-nginx-static-site.sh"
-CERT_URL="$BASE_URL/tools/cert-finder.sh"
 CERT_AUTO_URL="$BASE_URL/tools/cert-auto-use.sh"
+CERT_POOL_URL="$BASE_URL/tools/cert-pool.sh"
 OUTBOUND_URL="$BASE_URL/tools/configure-outbound-proxy.sh"
+SELF_UPDATE_URL="$BASE_URL/tools/self-update.sh"
+UNINSTALL_URL="$BASE_URL/tools/uninstall.sh"
 TMP_FILES=""
 PKG_MANAGER="unknown"
 
@@ -106,18 +108,20 @@ patch_main_installer() {
 import sys
 p = sys.argv[1]
 s = open(p, 'r', encoding='utf-8').read()
-s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动同步到运行目录"')
-s = s.replace('echo "  5) 检测本地证书并选择路径复用"', 'echo "  5) 检测本地证书并自动同步到运行目录"')
+s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动使用/续期/同步"')
+s = s.replace('echo "  5) 检测本地证书并选择路径复用"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
+s = s.replace('echo "  5) 检测本地证书并自动同步到运行目录"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
 s = s.replace('read -r -p "输入序号 [4]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}', 'read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}')
-s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
-s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
 open(p, 'w', encoding='utf-8').write(s)
 PY
 
   if ! grep -q 'cert-auto-use.sh' "$f"; then
-    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动同步到运行目录"#' "$f" || true
+    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动使用/续期/同步"#' "$f" || true
     sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
-    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac#' "$f" || true
+    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac#' "$f" || true
   fi
 }
 
@@ -149,12 +153,55 @@ install_nginx_site() {
   run_remote_script "$NGINX_URL"
 }
 
-find_local_cert() {
-  run_remote_script "$CERT_URL"
+default_domain() {
+  for env in /etc/mihomo/install.env /etc/sing-box/install.env; do
+    [ -f "$env" ] || continue
+    sed -n 's/^DOMAIN="\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' "$env" | head -n 1
+    return 0
+  done
+}
+
+detect_core() {
+  if [ -f /etc/mihomo/install.env ]; then echo mihomo; return 0; fi
+  if [ -f /etc/sing-box/install.env ]; then echo sing-box; return 0; fi
+  echo mihomo
+}
+
+repair_local_cert() {
+  local domain core default target_cert target_key
+  default="$(default_domain || true)"
+  if [ -n "$default" ]; then
+    read -r -p "请输入域名 [$default]: " domain
+    domain="${domain:-$default}"
+  else
+    read -r -p "请输入域名: " domain
+  fi
+  [ -n "$domain" ] || { echo "域名不能为空。" >&2; return 1; }
+
+  read -r -p "同步到哪个内核 [mihomo/sing-box] [$(detect_core)]: " core
+  core="${core:-$(detect_core)}"
+  case "$core" in
+    mihomo) target_cert="/etc/mihomo/certs/fullchain.pem"; target_key="/etc/mihomo/certs/key.pem" ;;
+    sing-box|singbox) target_cert="/etc/sing-box/certs/fullchain.pem"; target_key="/etc/sing-box/certs/key.pem" ;;
+    *) echo "未知内核：$core" >&2; return 1 ;;
+  esac
+  run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"
+}
+
+manage_cert_pool() {
+  run_remote_script "$CERT_POOL_URL"
 }
 
 configure_outbound() {
   run_remote_script "$OUTBOUND_URL"
+}
+
+manage_self_update() {
+  run_remote_script "$SELF_UPDATE_URL"
+}
+
+uninstall_tool() {
+  run_remote_script "$UNINSTALL_URL"
 }
 
 service_status() {
@@ -235,7 +282,7 @@ restart_services() {
 menu() {
   local action
   echo "============================================================"
-  echo " mihomo-anytls 管理菜单"
+  echo " mihomo-anytls 统一管理菜单"
   echo " 版本: $INSTALLER_VERSION"
   echo "============================================================"
   echo "请选择操作："
@@ -244,8 +291,11 @@ menu() {
   echo "  3) 安装 / 更新 Nginx 静态站"
   echo "  4) 查看服务状态"
   echo "  5) 重启服务"
-  echo "  6) 检测本地证书有效期"
-  echo "  7) 配置 HTTP / SOCKS5 出口代理"
+  echo "  6) 检测本地证书并自动使用 / 续期 / 同步"
+  echo "  7) 多节点证书池管理"
+  echo "  8) 配置 HTTP / SOCKS5 出口代理"
+  echo "  9) 自动更新脚本管理"
+  echo " 10) 卸载 mihomo-anytls"
   echo "  0) 退出"
   read -r -p "输入序号 [1]: " action
   action="${action:-1}"
@@ -256,8 +306,11 @@ menu() {
     3) install_nginx_site ;;
     4) service_status ;;
     5) restart_services ;;
-    6) find_local_cert ;;
-    7) configure_outbound ;;
+    6) repair_local_cert ;;
+    7) manage_cert_pool ;;
+    8) configure_outbound ;;
+    9) manage_self_update ;;
+    10) uninstall_tool ;;
     0) exit 0 ;;
     *) echo "无效操作：$action" >&2; exit 1 ;;
   esac
@@ -269,8 +322,11 @@ main() {
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
     --nginx|nginx|site) install_nginx_site ;;
-    --cert|cert|certificate) find_local_cert ;;
+    --cert|cert|certificate|repair-cert) repair_local_cert ;;
+    --cert-pool|cert-pool|pool) manage_cert_pool ;;
     --outbound|outbound|proxy) configure_outbound ;;
+    --self-update|self-update|update-self) manage_self_update ;;
+    --uninstall|uninstall|remove) uninstall_tool ;;
     --status|status) service_status ;;
     --restart|restart) restart_services ;;
     "") menu ;;
