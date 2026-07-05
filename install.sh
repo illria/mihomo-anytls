@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-eianun-en-mi-ssl-manager-v1"
+INSTALLER_VERSION="2026-07-06-eianun-en-mi-ssl-manager-v2"
 AUTHOR="Eianun"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
@@ -26,15 +26,8 @@ cleanup(){
   done
 }
 trap cleanup EXIT
-
 has(){ command -v "$1" >/dev/null 2>&1; }
-
-need_root(){
-  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    echo "请使用 root 运行，例如：sudo bash <(curl -fsSL $BASE_URL/install.sh)" >&2
-    exit 1
-  fi
-}
+need_root(){ if [ "${EUID:-$(id -u)}" -ne 0 ]; then echo "请使用 root 运行，例如：sudo bash <(curl -fsSL $BASE_URL/install.sh)" >&2; exit 1; fi; }
 
 detect_pkg(){
   if has apt-get; then PKG_MANAGER=apt
@@ -93,24 +86,15 @@ ensure_python3(){
   esac
 }
 
-make_tmp(){
-  local f
-  if has mktemp; then f="$(mktemp /tmp/mihomo-anytls.XXXXXX.sh)"; else f="/tmp/mihomo-anytls.$$.$RANDOM.sh"; fi
-  TMP_FILES="$TMP_FILES $f"
-  printf '%s' "$f"
-}
+make_tmp(){ local f; if has mktemp; then f="$(mktemp /tmp/mihomo-anytls.XXXXXX.sh)"; else f="/tmp/mihomo-anytls.$$.$RANDOM.sh"; fi; TMP_FILES="$TMP_FILES $f"; printf '%s' "$f"; }
 
 download_file(){
   local url="$1" out="$2" sep="?" busted=""
   case "$url" in *\?*) sep="&";; esac
   busted="${url}${sep}t=$(date +%s)"
-  if has curl; then
-    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
-  elif has wget; then
-    wget --no-cache -qO "$out" "$busted"
-  else
-    echo "缺少 curl/wget，请先安装其中一个。" >&2
-    exit 1
+  if has curl; then curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
+  elif has wget; then wget --no-cache -qO "$out" "$busted"
+  else echo "缺少 curl/wget，请先安装其中一个。" >&2; exit 1
   fi
   chmod +x "$out"
 }
@@ -129,7 +113,6 @@ patch_main_installer(){
   local f="$1"
   [ -f "$f" ] || return 0
   ensure_python3 || true
-
   python3 - "$f" <<'PY'
 import re
 import sys
@@ -166,38 +149,18 @@ choose_cert(){
   local out selected_domain
   [ -n "${CERT_MODE:-}" ] || choose_cert_mode
   case "$CERT_MODE" in
-    1)
-      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
-      self_cert
-      ;;
-    2)
-      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
-      custom_cert
-      ;;
-    3)
-      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
-      issue_80
-      ;;
-    4)
-      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
-      issue_cf
-      ;;
+    1) [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"; self_cert ;;
+    2) [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"; custom_cert ;;
+    3) [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"; issue_80 ;;
+    4) [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"; issue_cf ;;
     5)
       out="$(mktemp /tmp/mihomo-anytls-cert-select.XXXXXX.env)"
       if curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh?t=$(date +%s)" | bash -s -- "" "$CERT_FILE" "$KEY_FILE" 15 "$out"; then
-        if [ -f "$out" ]; then
-          . "$out"
-          selected_domain="${SELECTED_DOMAIN:-}"
-          [ -n "$selected_domain" ] && DOMAIN="$selected_domain"
-        fi
-        rm -f "$out"
-        [ -n "$DOMAIN" ] || die "已选择证书，但没有识别到域名。"
-        SKIP_CERT_VERIFY=false
+        if [ -f "$out" ]; then . "$out"; selected_domain="${SELECTED_DOMAIN:-}"; [ -n "$selected_domain" ] && DOMAIN="$selected_domain"; fi
+        rm -f "$out"; [ -n "$DOMAIN" ] || die "已选择证书，但没有识别到域名。"; SKIP_CERT_VERIFY=false
       else
-        rm -f "$out"
-        die "本机未找到可用证书。请重新运行后选择 3) 80端口申请 或 4) Cloudflare DNS 验证。"
-      fi
-      ;;
+        rm -f "$out"; die "本机未找到可用证书。请重新运行后选择 3) 80端口申请 或 4) Cloudflare DNS 验证。"
+      fi ;;
     *) die "无效证书方式" ;;
   esac
 }
@@ -221,8 +184,7 @@ build_share_link(){
 
 install_cert_renew_cron(){
   local cron log
-  cron="/etc/cron.d/mihomo-anytls-cert-renew"
-  log="/var/log/mihomo-anytls-cert-renew.log"
+  cron="/etc/cron.d/mihomo-anytls-cert-renew"; log="/var/log/mihomo-anytls-cert-renew.log"
   mkdir -p /etc/cron.d /var/log
   cat > "$cron" <<EOF
 SHELL=/bin/bash
@@ -248,7 +210,9 @@ summary(){
 '''
 s = re.sub(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
 
-s = re.sub(r'compose_up\(\)\{.*?\n\}', 'compose_up(){ if docker compose version >/dev/null 2>&1; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up -d --build); elif has docker-compose; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up -d --build); else return 1; fi; }\n\ndocker_build_image(){ (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 docker build -t "$IMAGE_NAME" .) || DOCKER_BUILDKIT=0 docker build --no-cache -t "$IMAGE_NAME" "$WORK_DIR"; }', s, flags=re.S)
+old_compose = 'compose_up(){ if docker compose version >/dev/null 2>&1; then (cd "$WORK_DIR" && docker compose up -d --build); elif has docker-compose; then (cd "$WORK_DIR" && docker-compose up -d --build); else return 1; fi; }'
+new_compose = 'compose_up(){ if docker compose version >/dev/null 2>&1; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up -d --build); elif has docker-compose; then (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker-compose up -d --build); else return 1; fi; }\n\ndocker_build_image(){ (cd "$WORK_DIR" && DOCKER_BUILDKIT=0 docker build -t "$IMAGE_NAME" .) || DOCKER_BUILDKIT=0 docker build --no-cache -t "$IMAGE_NAME" "$WORK_DIR"; }'
+s = s.replace(old_compose, new_compose)
 s = s.replace('docker build -t "$IMAGE_NAME" "$WORK_DIR"', 'docker_build_image || die "Docker 镜像构建失败：当前 VPS 的 Docker/procfs 可能不支持 build，请改用裸机 systemd 模式"')
 s = s.replace('choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; collect_inputs; choose_cert; write_config', 'choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; choose_cert_mode; collect_inputs; choose_cert; write_config')
 s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
@@ -256,15 +220,7 @@ open(p, 'w', encoding='utf-8').write(s)
 PY
 }
 
-run_remote_script(){
-  local url="$1" f
-  shift || true
-  f="$(make_tmp)"
-  download_file "$url" "$f"
-  if [ "$url" = "$MAIN_URL" ]; then patch_main_installer "$f"; fi
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then bash "$f" "$@" < /dev/tty; else bash "$f" "$@"; fi
-}
-
+run_remote_script(){ local url="$1" f; shift || true; f="$(make_tmp)"; download_file "$url" "$f"; if [ "$url" = "$MAIN_URL" ]; then patch_main_installer "$f"; fi; if [ -r /dev/tty ] && [ -w /dev/tty ]; then bash "$f" "$@" < /dev/tty; else bash "$f" "$@"; fi; }
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
 show_nodes(){ run_remote_script "$SHOW_URL"; }
 install_nginx_site(){ run_remote_script "$NGINX_URL"; }
@@ -274,48 +230,18 @@ manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
 configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
 manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
 uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
-
-repair_local_cert(){
-  local domain core target_cert target_key
-  read -r -p "请输入域名，可留空自动扫描本机证书: " domain
-  read -r -p "同步到哪个内核 [mihomo/sing-box] [mihomo]: " core
-  core="${core:-mihomo}"
-  case "$core" in
-    mihomo) target_cert="/etc/mihomo/certs/fullchain.pem"; target_key="/etc/mihomo/certs/key.pem" ;;
-    sing-box|singbox) target_cert="/etc/sing-box/certs/fullchain.pem"; target_key="/etc/sing-box/certs/key.pem" ;;
-    *) echo "未知内核：$core" >&2; return 1 ;;
-  esac
-  run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"
-}
+repair_local_cert(){ local domain core target_cert target_key; read -r -p "请输入域名，可留空自动扫描本机证书: " domain; read -r -p "同步到哪个内核 [mihomo/sing-box] [mihomo]: " core; core="${core:-mihomo}"; case "$core" in mihomo) target_cert="/etc/mihomo/certs/fullchain.pem"; target_key="/etc/mihomo/certs/key.pem" ;; sing-box|singbox) target_cert="/etc/sing-box/certs/fullchain.pem"; target_key="/etc/sing-box/certs/key.pem" ;; *) echo "未知内核：$core" >&2; return 1 ;; esac; run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"; }
 
 service_status(){
-  echo "============================================================"
-  echo " 服务状态"
-  echo "============================================================"
-  if has docker; then
-    echo "Docker 容器："
-    docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | grep -E 'NAMES|mihomo-anytls|sing-box-|sing-box' || echo "  未发现 mihomo-anytls / sing-box 相关容器"
-  else
-    echo "Docker: 未安装或不可用"
-  fi
-  echo
-  echo "证书自动续期："
-  [ -f /etc/cron.d/mihomo-anytls-cert-renew ] && cat /etc/cron.d/mihomo-anytls-cert-renew || echo "  未安装"
-  echo
-  echo "端口监听："
-  if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090|:22077|:32077|:42077)\b' || echo "  未发现常用端口监听"; fi
+  echo "============================================================"; echo " 服务状态"; echo "============================================================"
+  if has docker; then echo "Docker 容器："; docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | grep -E 'NAMES|mihomo-anytls|sing-box-|sing-box' || echo "  未发现 mihomo-anytls / sing-box 相关容器"; else echo "Docker: 未安装或不可用"; fi
+  echo; echo "证书自动续期："; [ -f /etc/cron.d/mihomo-anytls-cert-renew ] && cat /etc/cron.d/mihomo-anytls-cert-renew || echo "  未安装"
+  echo; echo "端口监听："; if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090|:22077|:32077|:42077)\b' || echo "  未发现常用端口监听"; fi
 }
 
 restart_services(){
-  if has docker; then
-    docker restart mihomo-anytls >/dev/null 2>&1 && echo "已重启 Docker: mihomo-anytls" || true
-    for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true; done
-  fi
-  if has systemctl; then
-    systemctl restart mihomo >/dev/null 2>&1 && echo "已重启 systemd: mihomo" || true
-    systemctl restart sing-box >/dev/null 2>&1 && echo "已重启 systemd: sing-box" || true
-    systemctl restart nginx >/dev/null 2>&1 && echo "已重启 systemd: nginx" || true
-  fi
+  if has docker; then docker restart mihomo-anytls >/dev/null 2>&1 && echo "已重启 Docker: mihomo-anytls" || true; for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true; done; fi
+  if has systemctl; then systemctl restart mihomo >/dev/null 2>&1 && echo "已重启 systemd: mihomo" || true; systemctl restart sing-box >/dev/null 2>&1 && echo "已重启 systemd: sing-box" || true; systemctl restart nginx >/dev/null 2>&1 && echo "已重启 systemd: nginx" || true; fi
 }
 
 menu(){
@@ -341,18 +267,7 @@ menu(){
   read -r -p "输入序号 [1]: " action
   action="${action:-1}"
   case "$action" in
-    1) install_or_update_node ;;
-    2) show_nodes ;;
-    3) install_nginx_site ;;
-    4) service_status ;;
-    5) restart_services ;;
-    6) ssl_manager ;;
-    7) manage_cert_pool ;;
-    8) configure_outbound ;;
-    9) manage_self_update ;;
-    10) uninstall_tool ;;
-    0) exit 0 ;;
-    *) echo "无效操作：$action" >&2; exit 1 ;;
+    1) install_or_update_node ;; 2) show_nodes ;; 3) install_nginx_site ;; 4) service_status ;; 5) restart_services ;; 6) ssl_manager ;; 7) manage_cert_pool ;; 8) configure_outbound ;; 9) manage_self_update ;; 10) uninstall_tool ;; 0) exit 0 ;; *) echo "无效操作：$action" >&2; exit 1 ;;
   esac
 }
 
@@ -360,20 +275,7 @@ main(){
   need_root
   install_shortcuts || true
   case "${1:-}" in
-    --install|install|node) install_or_update_node ;;
-    --show|show|list) show_nodes ;;
-    --nginx|nginx|site) install_nginx_site ;;
-    --ssl|ssl|ssl-manager|ssl-manager) ssl_manager ;;
-    --cert|cert|certificate|cert-center) ssl_manager ;;
-    --repair-cert|repair-cert) repair_local_cert ;;
-    --cert-pool|cert-pool|pool) manage_cert_pool ;;
-    --outbound|outbound|proxy) configure_outbound ;;
-    --self-update|self-update|update-self) manage_self_update ;;
-    --uninstall|uninstall|remove) uninstall_tool ;;
-    --status|status) service_status ;;
-    --restart|restart) restart_services ;;
-    "") menu ;;
-    *) echo "未知参数：$1" >&2; menu ;;
+    --install|install|node) install_or_update_node ;; --show|show|list) show_nodes ;; --nginx|nginx|site) install_nginx_site ;; --ssl|ssl|ssl-manager) ssl_manager ;; --cert|cert|certificate|cert-center) ssl_manager ;; --repair-cert|repair-cert) repair_local_cert ;; --cert-pool|cert-pool|pool) manage_cert_pool ;; --outbound|outbound|proxy) configure_outbound ;; --self-update|self-update|update-self) manage_self_update ;; --uninstall|uninstall|remove) uninstall_tool ;; --status|status) service_status ;; --restart|restart) restart_services ;; "") menu ;; *) echo "未知参数：$1" >&2; menu ;;
   esac
 }
 
