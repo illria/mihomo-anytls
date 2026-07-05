@@ -11,24 +11,9 @@ info(){ printf '[INFO] %s\n' "$*"; }
 warn(){ printf '[WARN] %s\n' "$*"; }
 err(){ printf '[ERR ] %s\n' "$*" >&2; }
 
-confirm(){
-  msg="$1"
-  def="${2:-y}"
-  ans=""
-  if [ "$def" = "y" ]; then
-    read -r -p "$msg [Y/n]: " ans
-    ans="${ans:-y}"
-  else
-    read -r -p "$msg [y/N]: " ans
-    ans="${ans:-n}"
-  fi
-  case "$ans" in y|Y|yes|YES) return 0;; *) return 1;; esac
-}
-
 safe_name(){ printf '%s' "$1" | sed 's#[^A-Za-z0-9._-]#_#g'; }
 now_utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
-[ -n "$DOMAIN" ] || { read -r -p "请输入域名: " DOMAIN; }
 [ -n "$DOMAIN" ] || { err "域名不能为空"; exit 1; }
 [ -n "$TARGET_CERT" ] || TARGET_CERT="/etc/mihomo/certs/fullchain.pem"
 [ -n "$TARGET_KEY" ] || TARGET_KEY="/etc/mihomo/certs/key.pem"
@@ -94,16 +79,36 @@ install_pair(){
   sync_pool_to_runtime
 }
 
-try_acme_renew(){
+renew_acme(){
   cert="$1"
   key="$2"
   source="$3"
   acme="/root/.acme.sh/acme.sh"
   [ -x "$acme" ] || return 1
-  echo "$cert" | grep -q '/.acme.sh/' || return 1
-  info "检测到 acme.sh 证书，尝试续期: $DOMAIN"
+  info "检测到 acme.sh 证书，按 acme.sh 方式续期: $DOMAIN"
   "$acme" --renew -d "$DOMAIN" --ecc --force || "$acme" --renew -d "$DOMAIN" --force || return 1
   install_pair "$cert" "$key" "$source"
+}
+
+renew_certbot(){
+  cert="$1"
+  key="$2"
+  source="$3"
+  command -v certbot >/dev/null 2>&1 || return 1
+  info "检测到 certbot 证书，按 certbot 方式续期: $DOMAIN"
+  certbot renew --cert-name "$DOMAIN" --force-renewal || certbot renew --force-renewal || return 1
+  install_pair "$cert" "$key" "$source"
+}
+
+renew_by_source(){
+  cert="$1"
+  key="$2"
+  source="$3"
+  case "$source" in
+    acme.sh|acme.sh-ecc) renew_acme "$cert" "$key" "$source" ;;
+    certbot) renew_certbot "$cert" "$key" "$source" ;;
+    *) warn "该来源暂不支持自动续期: $source"; return 1 ;;
+  esac
 }
 
 try_pair(){
@@ -120,17 +125,15 @@ try_pair(){
   info "来源: $source"
   info "剩余天数: $days"
   if [ "$days" -gt "$WARN_DAYS" ]; then
-    if confirm "是否导入证书池并同步到运行目录？" y; then
-      install_pair "$cert" "$key" "$source"
-      exit 0
-    fi
-    return 1
+    info "证书未过期，自动导入证书池并同步到运行目录。"
+    install_pair "$cert" "$key" "$source"
+    exit 0
   fi
-  warn "证书已过期或即将过期。"
-  if confirm "是否尝试按原 acme.sh 记录续期，成功后导入证书池并同步？" y; then
-    try_acme_renew "$cert" "$key" "$source" && exit 0
-    warn "自动续期失败。"
+  warn "证书已过期或即将过期，自动按来源尝试续期。"
+  if renew_by_source "$cert" "$key" "$source"; then
+    exit 0
   fi
+  warn "续期失败或该来源不支持自动续期。"
   return 1
 }
 
@@ -140,5 +143,5 @@ try_pair "/root/.acme.sh/${DOMAIN}_ecc/fullchain.cer" "/root/.acme.sh/${DOMAIN}_
 try_pair "/root/.acme.sh/${DOMAIN}/fullchain.cer" "/root/.acme.sh/${DOMAIN}/${DOMAIN}.key" "acme.sh" || true
 try_pair "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" "/etc/letsencrypt/live/${DOMAIN}/privkey.pem" "certbot" || true
 
-warn "没有可自动使用的证书。"
+warn "没有可自动使用或自动续期的本地证书。"
 exit 2
