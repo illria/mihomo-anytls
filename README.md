@@ -20,10 +20,22 @@
 
 ## 快速使用
 
+推荐一行命令：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/mihomo-anytls-install.sh -o mihomo-anytls-install.sh
-chmod +x mihomo-anytls-install.sh
-sudo bash mihomo-anytls-install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh)
+```
+
+如果你的系统不支持 bash 进程替换，可以用管道方式：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh | bash
+```
+
+如果当前不是 root，请加 `sudo`：
+
+```bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh)"
 ```
 
 ## 推荐组合
