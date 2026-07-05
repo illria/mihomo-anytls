@@ -1,5 +1,7 @@
 # mihomo-anytls
 
+作者：**Eianun**
+
 一个简单的一键脚本，用来在 Linux VPS 上安装和管理代理节点。
 
 支持：
@@ -8,32 +10,18 @@
 - sing-box AnyTLS / Hysteria2 / TUIC / Trojan
 - Docker 安装
 - systemd 裸机安装
-- 自动证书检测、续期、同步
+- SSL Manager（参考 3x-ui 的证书管理模型）
+- `/root/cert/<domain>/fullchain.pem` + `privkey.pem` 标准证书目录
 - 多节点证书池
 - 分享链接输出
 - 出口代理设置
 - 自动更新脚本
 - 卸载
-
----
-
-## 适合谁用？
-
-适合想快速搭建节点的人：
-
-```text
-买一台 VPS
-准备一个域名
-执行一行命令
-按照菜单选择
-安装完成后复制分享链接
-```
+- 快捷启动命令：`en-mi`
 
 ---
 
 ## 一键运行
-
-推荐使用：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh)
@@ -47,17 +35,41 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/ma
 
 ---
 
+## 快捷命令 en-mi
+
+安装或更新本机命令：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) self-update
+```
+
+安装后可以直接运行：
+
+```bash
+en-mi
+```
+
+也可以使用完整命令：
+
+```bash
+mihomo-anytls
+```
+
+---
+
 ## 主菜单
 
-运行脚本后会看到统一菜单：
-
 ```text
+mihomo-anytls 统一管理菜单
+作者: Eianun
+快捷命令: en-mi
+
 1) 安装 / 更新节点
 2) 查看本机已安装节点信息
 3) 安装 / 更新 Nginx 静态站
 4) 查看服务状态
 5) 重启服务
-6) 检测本地证书并自动使用 / 续期 / 同步
+6) SSL Manager（证书申请 / 安装 / 续期 / 同步）
 7) 多节点证书池管理
 8) 配置 HTTP / SOCKS5 出口代理
 9) 自动更新脚本管理
@@ -69,22 +81,46 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/ma
 
 ## 推荐安装选择
 
-新手推荐这样选：
+新手推荐：
 
 ```text
 内核：mihomo
 安装方式：Docker
 协议：AnyTLS
-证书：Cloudflare DNS 验证证书 或 检测本地证书
+证书：SSL Manager 申请或已有 /root/cert/<domain>/ 证书
 端口：443 / 8443 / 2053 / 自定义端口
 ```
 
-如果你用的是 Cloudflare 域名，建议：
+Cloudflare 域名建议关闭橙色云朵，使用 DNS only。
+
+---
+
+## SSL Manager 证书模型
+
+本项目现在按 3x-ui 的 SSL 管理思路整理证书：
 
 ```text
-DNS 记录关闭橙色云朵
-保持 DNS only
+/root/cert/<domain>/
+  fullchain.pem
+  privkey.pem
 ```
+
+服务只应该使用：
+
+```text
+证书：/root/cert/<domain>/fullchain.pem
+私钥：/root/cert/<domain>/privkey.pem
+```
+
+不要把下面这些文件当私钥：
+
+```text
+ca.cer
+fullchain.cer
+fullchain.pem
+```
+
+真正的私钥必须能被 OpenSSL 识别为 PRIVATE KEY。
 
 ---
 
@@ -107,7 +143,7 @@ DNS 记录关闭橙色云朵
 日志命令
 ```
 
-最重要的是这一行：
+最重要的是：
 
 ```text
 分享链接: anytls://...
@@ -117,101 +153,15 @@ DNS 记录关闭橙色云朵
 
 ---
 
-## 证书怎么处理？
-
-脚本支持几种证书方式：
-
-```text
-1) 自签证书
-2) 自定义证书路径
-3) 80 端口申请 Let's Encrypt
-4) Cloudflare DNS 验证证书
-5) 检测本地证书并自动使用 / 续期 / 同步
-```
-
-第 5 项的逻辑是：
-
-```text
-检测本地证书
-  ↓
-证书存在且没过期：直接使用
-  ↓
-证书快过期或已过期：按来源续期
-  ↓
-续期成功：同步到运行目录
-  ↓
-写入多节点证书池
-```
-
-当前会检测这些位置：
-
-```text
-/etc/mihomo/certs/
-/etc/sing-box/certs/
-/root/.acme.sh/<domain>_ecc/
-/root/.acme.sh/<domain>/
-/etc/letsencrypt/live/<domain>/
-```
-
----
-
-## 自动续期证书
-
-安装完成后，脚本会写入定时任务：
-
-```text
-/etc/cron.d/mihomo-anytls-cert-renew
-```
-
-默认每天检查一次证书。
-
-如果证书剩余时间小于等于 15 天，会尝试自动续期并同步到运行目录。
-
-查看状态：
-
-```bash
-cat /etc/cron.d/mihomo-anytls-cert-renew
-```
-
-查看日志：
-
-```bash
-cat /var/log/mihomo-anytls-cert-renew.log
-```
-
----
-
-## 多节点证书池
-
-证书池目录：
-
-```text
-/etc/mihomo-anytls/cert-pool/
-```
-
-每个域名一个目录，例如：
-
-```text
-/etc/mihomo-anytls/cert-pool/example.com/
-  fullchain.pem
-  key.pem
-  meta.env
-```
-
-作用：
-
-```text
-保存多个域名证书
-记录证书来源
-记录过期时间
-方便同步到 mihomo 或 sing-box
-```
-
----
-
 ## 常用命令
 
 打开主菜单：
+
+```bash
+en-mi
+```
+
+或：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh)
@@ -220,37 +170,37 @@ bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/in
 直接安装 / 更新节点：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) install
+en-mi install
 ```
 
 查看状态：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) status
+en-mi status
 ```
 
-检测并修复证书：
+SSL Manager：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) cert
+en-mi ssl-manager
 ```
 
-管理证书池：
+证书池管理：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) cert-pool
+en-mi cert-pool
 ```
 
 自动更新脚本：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) self-update
+en-mi self-update
 ```
 
 卸载：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/install.sh) uninstall
+en-mi uninstall
 ```
 
 ---
@@ -282,6 +232,7 @@ sing-box：
 全局目录：
 
 ```text
+/root/cert/
 /etc/mihomo-anytls/
 /etc/mihomo-anytls/cert-pool/
 ```
@@ -333,23 +284,13 @@ DNS only
 
 不要使用 Cloudflare 代理模式。
 
-### 3. 80 端口申请证书失败怎么办？
+### 3. 证书和私钥必须配对
 
-可能是：
+可以用：
 
-```text
-80 端口被占用
-安全组没放行 80
-域名没有解析到当前 VPS
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-pair-check.sh) /root/cert/example.com/fullchain.pem /root/cert/example.com/privkey.pem
 ```
-
-可以改用 Cloudflare DNS 验证证书。
-
-### 4. 软路由环境可能需要手动处理 Docker
-
-OpenWrt / iStoreOS / ImmortalWrt 的 Docker 环境差异比较大。
-
-如果 Docker 安装失败，先确认 Docker daemon 已经正常运行。
 
 ---
 
