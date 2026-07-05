@@ -7,6 +7,7 @@ TARGET_KEY="${3:-/etc/mihomo/certs/key.pem}"
 WARN_DAYS="${4:-15}"
 OUT_ENV="${5:-}"
 POOL_DIR="/etc/mihomo-anytls/cert-pool"
+ROOT_CERT_DIR="/root/cert"
 
 info(){ printf '[INFO] %s\n' "$*"; }
 warn(){ printf '[WARN] %s\n' "$*" >&2; }
@@ -123,7 +124,7 @@ source_candidates(){
   local dir d key cert
   for dir in /root/.acme.sh/*_ecc; do
     [ -d "$dir" ] || continue
-    d="$(basename "$dir")"; d="${d%_ecc}"
+    d="$(basename "$dir")"; d="${d%_cc}"; d="${d%_ecc}"
     key="$dir/${d}.key"
     cert="$(acme_cert_in_dir "$dir" "$d" || true)"
     [ -n "$cert" ] && emit_cert "$cert" "$key" acme.sh-ecc || emit_acme_record "$dir" "$d" "$key" acme-record-ecc || true
@@ -150,6 +151,17 @@ runtime_candidates(){
 
 candidates(){ source_candidates; runtime_candidates; }
 
+sync_root_cert(){
+  local cert="$1" key="$2" root_dir
+  root_dir="$ROOT_CERT_DIR/$(safe_name "$DOMAIN")"
+  mkdir -p "$root_dir"
+  cp -f "$cert" "$root_dir/fullchain.pem"
+  cp -f "$key" "$root_dir/privkey.pem"
+  chmod 644 "$root_dir/fullchain.pem"
+  chmod 600 "$root_dir/privkey.pem"
+  info "已同步标准证书目录: $root_dir"
+}
+
 install_pair(){
   local cert="$1" key="$2" source="$3" dir days end
   [ -f "$cert" ] || { err "证书文件不存在: $cert"; return 1; }
@@ -160,6 +172,7 @@ install_pair(){
   cp -f "$key" "$dir/key.pem"
   chmod 644 "$dir/fullchain.pem"
   chmod 600 "$dir/key.pem"
+  sync_root_cert "$dir/fullchain.pem" "$dir/key.pem"
   cp -f "$dir/fullchain.pem" "$TARGET_CERT"
   cp -f "$dir/key.pem" "$TARGET_KEY"
   chmod 644 "$TARGET_CERT"
@@ -173,6 +186,8 @@ SOURCE_CERT="$cert"
 SOURCE_KEY="$key"
 POOL_CERT="$dir/fullchain.pem"
 POOL_KEY="$dir/key.pem"
+ROOT_CERT="$ROOT_CERT_DIR/$(safe_name "$DOMAIN")/fullchain.pem"
+ROOT_KEY="$ROOT_CERT_DIR/$(safe_name "$DOMAIN")/privkey.pem"
 RUNTIME_CERT="$TARGET_CERT"
 RUNTIME_KEY="$TARGET_KEY"
 IMPORTED_AT="$(now_utc)"
@@ -185,6 +200,8 @@ EOF
 SELECTED_DOMAIN="$DOMAIN"
 SELECTED_CERT="$cert"
 SELECTED_KEY="$key"
+SELECTED_ROOT_CERT="$ROOT_CERT_DIR/$(safe_name "$DOMAIN")/fullchain.pem"
+SELECTED_ROOT_KEY="$ROOT_CERT_DIR/$(safe_name "$DOMAIN")/privkey.pem"
 SELECTED_SOURCE="$source"
 EOF
     chmod 600 "$OUT_ENV" 2>/dev/null || true
