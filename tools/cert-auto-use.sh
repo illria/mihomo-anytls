@@ -15,13 +15,13 @@ safe_name(){ printf '%s' "$1" | sed 's#[^A-Za-z0-9._-]#_#g'; }
 now_utc(){ date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 
 ask(){
-  local var="$1" msg="$2" def="${3:-}" ans=""
+  local __var="$1" __msg="$2" __def="${3:-}" __answer=""
   if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    printf '%s [%s]: ' "$msg" "$def" > /dev/tty
-    IFS= read -r ans < /dev/tty || ans=""
+    printf '%s [%s]: ' "$__msg" "$__def" > /dev/tty
+    IFS= read -r __answer < /dev/tty || __answer=""
   fi
-  ans="${ans:-$def}"
-  printf -v "$var" '%s' "$ans"
+  __answer="${__answer:-$__def}"
+  printf -v "$__var" '%s' "$__answer"
 }
 
 command -v openssl >/dev/null 2>&1 || { err "缺少 openssl"; exit 1; }
