@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-unified-menu-cert-auto-repair-v1"
+INSTALLER_VERSION="2026-07-06-share-link-cert-cron-v1"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
@@ -74,6 +74,22 @@ ensure_crontab() {
   start_cron
 }
 
+ensure_python3() {
+  has python3 && return 0
+  detect_pkg
+  echo "[INFO] 未检测到 python3，预安装 python3 以修补安装器。"
+  case "$PKG_MANAGER" in
+    apt) apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y python3 ;;
+    dnf) dnf install -y python3 ;;
+    yum) yum install -y python3 ;;
+    apk) apk add --no-cache python3 ;;
+    pacman) pacman -Sy --noconfirm --needed python ;;
+    zypper) zypper --non-interactive install python3 ;;
+    opkg) opkg update || true; opkg install python3 || true ;;
+    *) echo "[WARN] 未识别包管理器，跳过 python3 预安装。" >&2 ;;
+  esac
+}
+
 make_tmp() {
   local f
   if has mktemp; then
@@ -103,11 +119,14 @@ download_file() {
 patch_main_installer() {
   local f="$1"
   [ -f "$f" ] || return 0
+  ensure_python3 || true
 
-  python3 - "$f" <<'PY' 2>/dev/null || true
+  python3 - "$f" <<'PY'
+import re
 import sys
 p = sys.argv[1]
 s = open(p, 'r', encoding='utf-8').read()
+
 s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动使用/续期/同步"')
 s = s.replace('echo "  5) 检测本地证书并选择路径复用"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
 s = s.replace('echo "  5) 检测本地证书并自动同步到运行目录"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
@@ -115,14 +134,67 @@ s = s.replace('read -r -p "输入序号 [4]: " CERT_MODE; CERT_MODE=${CERT_MODE:
 s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
 s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
 s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+
+helper = r'''
+share_insecure_flag(){ [ "$SKIP_CERT_VERIFY" = true ] && echo 1 || echo 0; }
+
+build_share_link(){
+  local insecure tag
+  insecure="$(share_insecure_flag)"
+  tag="$DOMAIN-$PORT"
+  case "$PROTOCOL" in
+    anytls)
+      printf 'anytls://%s@%s:%s?peer=%s&insecure=%s&sni=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$DOMAIN" "$tag"
+      ;;
+    hysteria2)
+      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
+      ;;
+    tuic)
+      printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&sni=%s&allow_insecure=%s#%s\n' "$UUID_VALUE" "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
+      ;;
+    trojan)
+      printf 'trojan://%s@%s:%s?sni=%s&allowInsecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
+      ;;
+    *)
+      printf '暂不支持该协议分享链接: %s\n' "$PROTOCOL"
+      ;;
+  esac
+}
+
+install_cert_renew_cron(){
+  local cron log
+  cron="/etc/cron.d/mihomo-anytls-cert-renew"
+  log="/var/log/mihomo-anytls-cert-renew.log"
+  mkdir -p /etc/cron.d /var/log
+  cat > "$cron" <<EOF
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+23 3 * * * root curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' 'https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh?t='\$(date +\%s) | bash -s -- '$DOMAIN' '$CERT_FILE' '$KEY_FILE' 15 >> '$log' 2>&1
+EOF
+  chmod 644 "$cron"
+  info "已安装证书自动续期计划: $cron"
+  info "每天 03:23 检测证书；剩余 <=15 天按来源续期并同步。"
+}
+
+summary(){
+  echo; info "安装完成"; echo "------------------------------------------------------------"
+  echo "内核: $CORE"; [ "$CORE" = sing-box ] && echo "sing-box 版本: $SINGBOX_VERSION"
+  echo "协议: $PROTOCOL"; echo "模式: $INSTALL_MODE"; echo "域名: $DOMAIN"; echo "端口: $PORT/$NEED_PROTO"; echo "用户: $USER_NAME"; [ -n "$UUID_VALUE" ] && echo "UUID: $UUID_VALUE"; echo "密码: $PASSWORD"
+  echo "分享链接: $(build_share_link)"
+  echo "服务端配置: $CONFIG_FILE"; echo "mihomo 客户端示例: $CLIENT_MIHOMO_FILE"; echo "sing-box 客户端示例: $CLIENT_SINGBOX_FILE"; echo "证书: $CERT_FILE"; echo "私钥: $KEY_FILE"
+  echo "证书自动续期: /etc/cron.d/mihomo-anytls-cert-renew"
+  echo "------------------------------------------------------------"
+  [ "$INSTALL_MODE" = docker ] && echo "日志: docker logs -f $CONTAINER_NAME" || echo "日志: journalctl -u ${CORE/mihomo/mihomo} -f"
+  warn "Cloudflare DNS 记录建议关闭橙色云朵，使用 DNS only。"
+}
+'''
+
+s2, n = re.subn(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
+if n:
+    s = s2
+s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
 open(p, 'w', encoding='utf-8').write(s)
 PY
-
-  if ! grep -q 'cert-auto-use.sh' "$f"; then
-    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动使用/续期/同步"#' "$f" || true
-    sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
-    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac#' "$f" || true
-  fi
 }
 
 run_remote_script() {
@@ -145,13 +217,8 @@ install_or_update_node() {
   run_remote_script "$MAIN_URL"
 }
 
-show_nodes() {
-  run_remote_script "$SHOW_URL"
-}
-
-install_nginx_site() {
-  run_remote_script "$NGINX_URL"
-}
+show_nodes() { run_remote_script "$SHOW_URL"; }
+install_nginx_site() { run_remote_script "$NGINX_URL"; }
 
 default_domain() {
   for env in /etc/mihomo/install.env /etc/sing-box/install.env; do
@@ -188,21 +255,10 @@ repair_local_cert() {
   run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"
 }
 
-manage_cert_pool() {
-  run_remote_script "$CERT_POOL_URL"
-}
-
-configure_outbound() {
-  run_remote_script "$OUTBOUND_URL"
-}
-
-manage_self_update() {
-  run_remote_script "$SELF_UPDATE_URL"
-}
-
-uninstall_tool() {
-  run_remote_script "$UNINSTALL_URL"
-}
+manage_cert_pool() { run_remote_script "$CERT_POOL_URL"; }
+configure_outbound() { run_remote_script "$OUTBOUND_URL"; }
+manage_self_update() { run_remote_script "$SELF_UPDATE_URL"; }
+uninstall_tool() { run_remote_script "$UNINSTALL_URL"; }
 
 service_status() {
   echo "============================================================"
@@ -228,6 +284,10 @@ service_status() {
   else
     echo "  systemctl 不可用"
   fi
+
+  echo
+  echo "证书自动续期："
+  [ -f /etc/cron.d/mihomo-anytls-cert-renew ] && cat /etc/cron.d/mihomo-anytls-cert-renew || echo "  未安装"
 
   echo
   echo "端口监听："
