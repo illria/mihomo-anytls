@@ -34,13 +34,16 @@ cert_text(){ openssl x509 -in "$1" -noout -subject -issuer -enddate -ext subject
 cert_end(){ cert_text "$1" | sed -n 's/^notAfter=//p'; }
 left_days(){
   local end epoch now
+  [ -f "$1" ] || { echo missing; return 0; }
   end="$(cert_end "$1")"
+  [ -n "$end" ] || { echo unknown; return 0; }
   epoch="$(date -d "$end" +%s 2>/dev/null || echo 0)"
   now="$(date +%s)"
   echo $(( (epoch - now) / 86400 ))
 }
 extract_domains(){
   local cert="$1" text cn sans
+  [ -f "$cert" ] || return 0
   text="$(cert_text "$cert")"
   sans="$(printf '%s\n' "$text" | grep -oE 'DNS:[A-Za-z0-9*._-]+' | sed 's/^DNS://' | tr '\n' ' ')"
   cn="$(printf '%s\n' "$text" | sed -n 's/.*CN[ =]*\([^,/]*\).*/\1/p' | head -n1)"
@@ -50,6 +53,7 @@ primary_domain(){ extract_domains "$1" | awk '{print $1}'; }
 match_domain(){
   local cert="$1" d="$2"
   [ -n "$d" ] || return 1
+  [ -f "$cert" ] || return 1
   extract_domains "$cert" | tr ' ' '\n' | grep -Fxq "$d"
 }
 
@@ -66,6 +70,7 @@ copy_cert_as_fullchain(){
 
 import_to_pool(){
   local cert="$1" key="$2" source="$3" days end dir
+  [ -f "$cert" ] || { err "证书文件不存在，无法导入: $cert"; return 1; }
   days="$(left_days "$cert")"
   end="$(cert_end "$cert")"
   dir="$POOL_DIR/$(safe_name "$DOMAIN")"
@@ -123,12 +128,45 @@ install_pair(){
   write_out_env "$cert" "$key" "$source"
 }
 
+find_acme_cert_for_dir(){
+  local dir="$1" d="$2" cert=""
+  if [ -f "$dir/fullchain.cer" ]; then cert="$dir/fullchain.cer"
+  elif [ -f "$dir/${d}.cer" ]; then cert="$dir/${d}.cer"
+  else cert="$(find "$dir" -maxdepth 1 -type f -name '*.cer' ! -name 'ca.cer' ! -name 'fullchain.cer' | head -n1 || true)"
+  fi
+  [ -n "$cert" ] && printf '%s\n' "$cert"
+}
+
+renew_acme_record(){
+  local dir="$1" d="$2" key="$3" source="$4" acme cert
+  acme="/root/.acme.sh/acme.sh"
+  [ -x "$acme" ] || { err "未找到 acme.sh: $acme"; return 1; }
+  DOMAIN="${DOMAIN:-$d}"
+  info "发现 acme.sh 记录，尝试强制续期/补齐证书文件: $DOMAIN"
+  if [ "$source" = "acme.sh-ecc" ]; then
+    "$acme" --renew -d "$DOMAIN" --ecc --force || "$acme" --issue -d "$DOMAIN" --standalone --keylength ec-256 --server letsencrypt --force || return 1
+  else
+    "$acme" --renew -d "$DOMAIN" --force || "$acme" --issue -d "$DOMAIN" --standalone --server letsencrypt --force || return 1
+  fi
+  cert="$(find_acme_cert_for_dir "$dir" "$d" || true)"
+  [ -f "$cert" ] || { err "续期后仍未找到证书文件: $dir"; return 1; }
+  install_pair "$cert" "$key" "$source"
+}
+
 renew_acme(){
-  local cert="$1" key="$2" source="$3" acme
+  local cert="$1" key="$2" source="$3" acme dir d newcert
   acme="/root/.acme.sh/acme.sh"
   [ -x "$acme" ] || return 1
-  info "检测到 acme.sh 证书，按 acme.sh 方式续期: $DOMAIN"
-  "$acme" --renew -d "$DOMAIN" --ecc --force || "$acme" --renew -d "$DOMAIN" --force || return 1
+  dir="$(dirname "$cert")"
+  d="$(basename "$dir")"; d="${d%_ecc}"
+  info "检测到 acme.sh 证书，按 acme.sh 方式强制续期: $DOMAIN"
+  if [ "$source" = "acme.sh-ecc" ]; then
+    "$acme" --renew -d "$DOMAIN" --ecc --force || "$acme" --issue -d "$DOMAIN" --standalone --keylength ec-256 --server letsencrypt --force || return 1
+  else
+    "$acme" --renew -d "$DOMAIN" --force || "$acme" --issue -d "$DOMAIN" --standalone --server letsencrypt --force || return 1
+  fi
+  newcert="$(find_acme_cert_for_dir "$dir" "$d" || true)"
+  [ -f "$newcert" ] && cert="$newcert"
   install_pair "$cert" "$key" "$source"
 }
 
@@ -143,6 +181,14 @@ renew_certbot(){
 renew_by_source(){
   local cert="$1" key="$2" source="$3"
   case "$source" in
+    acme-record-ecc)
+      local dir d
+      dir="${cert#ACME_RECORD:}"; d="$(basename "$dir")"; d="${d%_ecc}"
+      renew_acme_record "$dir" "$d" "$key" "acme.sh-ecc" ;;
+    acme-record)
+      local dir d
+      dir="${cert#ACME_RECORD:}"; d="$(basename "$dir")"
+      renew_acme_record "$dir" "$d" "$key" "acme.sh" ;;
     acme.sh|acme.sh-ecc) renew_acme "$cert" "$key" "$source" ;;
     certbot) renew_certbot "$cert" "$key" "$source" ;;
     *) warn "该来源暂不支持自动续期: $source"; return 1 ;;
@@ -160,44 +206,34 @@ emit_candidate(){
   printf '%s|%s|%s|%s|%s|%s\n' "$cert" "$key" "$source" "$dom" "$days" "$domains"
 }
 
-find_acme_cert_for_dir(){
-  local dir="$1" d="$2" cert=""
-  if [ -f "$dir/fullchain.cer" ]; then
-    cert="$dir/fullchain.cer"
-  elif [ -f "$dir/${d}.cer" ]; then
-    cert="$dir/${d}.cer"
-  else
-    cert="$(find "$dir" -maxdepth 1 -type f -name '*.cer' ! -name 'ca.cer' ! -name 'fullchain.cer' | head -n1 || true)"
-  fi
-  [ -n "$cert" ] && printf '%s\n' "$cert"
+emit_acme_record_candidate(){
+  local dir="$1" d="$2" key="$3" source="$4"
+  [ -f "$key" ] || return 1
+  [ -f "$dir/${d}.conf" ] || return 1
+  printf 'ACME_RECORD:%s|%s|%s|%s|missing|%s\n' "$dir" "$key" "$source" "$d" "$d"
 }
 
 candidate_lines(){
-  local cert key source d dir rest item dom
-  for item in \
-    "/etc/mihomo/certs/fullchain.pem|/etc/mihomo/certs/key.pem|mihomo-runtime" \
-    "/etc/sing-box/certs/fullchain.pem|/etc/sing-box/certs/key.pem|sing-box-runtime"; do
+  local cert key source d dir rest item
+  for item in "/etc/mihomo/certs/fullchain.pem|/etc/mihomo/certs/key.pem|mihomo-runtime" "/etc/sing-box/certs/fullchain.pem|/etc/sing-box/certs/key.pem|sing-box-runtime"; do
     cert="${item%%|*}"; rest="${item#*|}"; key="${rest%%|*}"; source="${rest##*|}"
     emit_candidate "$cert" "$key" "$source" || true
   done
-
   for dir in /root/.acme.sh/*_ecc; do
     [ -d "$dir" ] || continue
     d="$(basename "$dir")"; d="${d%_ecc}"
     key="$dir/${d}.key"
     cert="$(find_acme_cert_for_dir "$dir" "$d" || true)"
-    emit_candidate "$cert" "$key" "acme.sh-ecc" || true
+    if [ -n "$cert" ] && [ -f "$cert" ]; then emit_candidate "$cert" "$key" "acme.sh-ecc" || true; else emit_acme_record_candidate "$dir" "$d" "$key" "acme-record-ecc" || true; fi
   done
-
   for dir in /root/.acme.sh/*; do
     [ -d "$dir" ] || continue
     case "$dir" in *_ecc) continue;; esac
     d="$(basename "$dir")"
     key="$dir/${d}.key"
     cert="$(find_acme_cert_for_dir "$dir" "$d" || true)"
-    emit_candidate "$cert" "$key" "acme.sh" || true
+    if [ -n "$cert" ] && [ -f "$cert" ]; then emit_candidate "$cert" "$key" "acme.sh" || true; else emit_acme_record_candidate "$dir" "$d" "$key" "acme-record" || true; fi
   done
-
   for cert in /etc/letsencrypt/live/*/fullchain.pem; do
     [ -f "$cert" ] || continue
     d="$(basename "$(dirname "$cert")")"
@@ -206,11 +242,16 @@ candidate_lines(){
   done
 }
 
+is_number_gt(){
+  case "$1" in ''|*[!0-9-]*) return 1;; *) [ "$1" -gt "$2" ];; esac
+}
+
 use_candidate(){
   local line="$1" cert key source dom days domains rest
   cert="${line%%|*}"; rest="${line#*|}"; key="${rest%%|*}"; rest="${rest#*|}"; source="${rest%%|*}"; rest="${rest#*|}"; dom="${rest%%|*}"; rest="${rest#*|}"; days="${rest%%|*}"; domains="${rest#*|}"
   DOMAIN="${DOMAIN:-$dom}"
-  if ! match_domain "$cert" "$DOMAIN"; then DOMAIN="$dom"; fi
+  if [ -f "$cert" ] && ! match_domain "$cert" "$DOMAIN"; then DOMAIN="$dom"; fi
+  [ ! -f "$cert" ] && DOMAIN="$dom"
   echo "------------------------------------------------------------"
   info "使用证书域名: $DOMAIN"
   info "证书路径: $cert"
@@ -218,12 +259,12 @@ use_candidate(){
   info "来源: $source"
   info "证书域名列表: $domains"
   info "剩余天数: $days"
-  if [ "$days" -gt "$WARN_DAYS" ]; then
+  if [ -f "$cert" ] && is_number_gt "$days" "$WARN_DAYS"; then
     info "证书未过期，直接导入证书池并同步到运行目录。"
     install_pair "$cert" "$key" "$source"
     exit 0
   fi
-  warn "证书已过期或即将过期，按来源尝试续期。"
+  warn "证书缺失、已过期或即将过期，按来源尝试强制续期。"
   if renew_by_source "$cert" "$key" "$source"; then exit 0; fi
   warn "续期失败或该来源不支持自动续期。"
   return 1
@@ -234,14 +275,14 @@ choose_from_candidates(){
   count="$(printf '%s\n' "$list" | sed '/^$/d' | wc -l | awk '{print $1}')"
   [ "$count" -gt 0 ] || return 1
   echo "------------------------------------------------------------"
-  if [ -n "$DOMAIN" ]; then warn "没有找到与输入域名匹配的本地证书: $DOMAIN"; else warn "未输入域名，先扫描本机已有证书。"; fi
-  echo "发现本机证书："
+  if [ -n "$DOMAIN" ]; then warn "没有找到与输入域名匹配的完整证书: $DOMAIN"; else warn "未输入域名，先扫描本机已有证书/证书记录。"; fi
+  echo "发现本机证书/证书记录："
   i=1
   printf '%s\n' "$list" | sed '/^$/d' | while IFS='|' read -r cert key source dom days domains; do
-    printf '  %s) %s  剩余天数=%s  来源=%s\n     证书: %s\n     私钥: %s\n' "$i" "$dom" "$days" "$source" "$cert" "$key"
+    printf '  %s) %s  剩余天数=%s  来源=%s\n     证书/记录: %s\n     私钥: %s\n' "$i" "$dom" "$days" "$source" "$cert" "$key"
     i=$((i+1))
   done
-  if [ "$count" -eq 1 ]; then choice=1; else prompt_read choice "请选择要使用的证书序号" "1"; fi
+  if [ "$count" -eq 1 ]; then choice=1; else prompt_read choice "请选择要使用的证书/记录序号" "1"; fi
   line="$(printf '%s\n' "$list" | sed '/^$/d' | sed -n "${choice}p")"
   [ -n "$line" ] || { err "无效选择: $choice"; return 1; }
   use_candidate "$line"
@@ -251,11 +292,11 @@ main(){
   local all exact
   all="$(candidate_lines | awk -F'|' '!seen[$1"|"$2]++')"
   if [ -n "$DOMAIN" ]; then
-    exact="$(printf '%s\n' "$all" | while IFS='|' read -r cert key source dom days domains; do [ -n "$cert" ] || continue; if printf '%s\n' "$domains" | tr ' ' '\n' | grep -Fxq "$DOMAIN"; then printf '%s|%s|%s|%s|%s|%s\n' "$cert" "$key" "$source" "$dom" "$days" "$domains"; fi; done | head -n1)"
+    exact="$(printf '%s\n' "$all" | while IFS='|' read -r cert key source dom days domains; do [ -n "$cert" ] || continue; if [ "$dom" = "$DOMAIN" ] || printf '%s\n' "$domains" | tr ' ' '\n' | grep -Fxq "$DOMAIN"; then printf '%s|%s|%s|%s|%s|%s\n' "$cert" "$key" "$source" "$dom" "$days" "$domains"; fi; done | head -n1)"
     [ -n "$exact" ] && use_candidate "$exact"
   fi
   choose_from_candidates "$all" || true
-  warn "没有可自动使用或自动续期的本地证书。"
+  warn "没有可自动使用或自动续期的本地证书/证书记录。"
   warn "已扫描 /etc/mihomo/certs、/etc/sing-box/certs、/root/.acme.sh、/etc/letsencrypt/live。"
   exit 2
 }
