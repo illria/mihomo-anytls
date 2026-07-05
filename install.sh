@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-share-link-cert-cron-v1"
+INSTALLER_VERSION="2026-07-06-cert-first-installer-v1"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
@@ -14,7 +14,7 @@ UNINSTALL_URL="$BASE_URL/tools/uninstall.sh"
 TMP_FILES=""
 PKG_MANAGER="unknown"
 
-cleanup() {
+cleanup(){
   local f
   for f in $TMP_FILES; do
     [ -n "$f" ] && [ -f "$f" ] && rm -f "$f"
@@ -22,16 +22,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-has() { command -v "$1" >/dev/null 2>&1; }
+has(){ command -v "$1" >/dev/null 2>&1; }
 
-need_root() {
+need_root(){
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     echo "请使用 root 运行，例如：sudo bash <(curl -fsSL $BASE_URL/install.sh)" >&2
     exit 1
   fi
 }
 
-detect_pkg() {
+detect_pkg(){
   if has apt-get; then PKG_MANAGER=apt
   elif has dnf; then PKG_MANAGER=dnf
   elif has yum; then PKG_MANAGER=yum
@@ -43,11 +43,9 @@ detect_pkg() {
   fi
 }
 
-start_cron() {
+start_cron(){
   if has systemctl && [ -d /run/systemd/system ]; then
-    systemctl enable --now cronie >/dev/null 2>&1 || \
-    systemctl enable --now cron >/dev/null 2>&1 || \
-    systemctl enable --now crond >/dev/null 2>&1 || true
+    systemctl enable --now cronie >/dev/null 2>&1 || systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
   elif has rc-service; then
     rc-update add crond default >/dev/null 2>&1 || rc-update add cron default >/dev/null 2>&1 || true
     rc-service crond start >/dev/null 2>&1 || rc-service cron start >/dev/null 2>&1 || true
@@ -57,10 +55,10 @@ start_cron() {
   fi
 }
 
-ensure_crontab() {
+ensure_crontab(){
   has crontab && { start_cron; return 0; }
   detect_pkg
-  echo "[INFO] 未检测到 crontab，预安装 cron/cronie 以兼容 acme.sh 自动续期检查。"
+  echo "[INFO] 未检测到 crontab，预安装 cron/cronie。"
   case "$PKG_MANAGER" in
     apt) apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y cron ;;
     dnf) dnf install -y cronie ;;
@@ -74,7 +72,7 @@ ensure_crontab() {
   start_cron
 }
 
-ensure_python3() {
+ensure_python3(){
   has python3 && return 0
   detect_pkg
   echo "[INFO] 未检测到 python3，预安装 python3 以修补安装器。"
@@ -90,18 +88,14 @@ ensure_python3() {
   esac
 }
 
-make_tmp() {
+make_tmp(){
   local f
-  if has mktemp; then
-    f="$(mktemp /tmp/mihomo-anytls.XXXXXX.sh)"
-  else
-    f="/tmp/mihomo-anytls.$$.$RANDOM.sh"
-  fi
+  if has mktemp; then f="$(mktemp /tmp/mihomo-anytls.XXXXXX.sh)"; else f="/tmp/mihomo-anytls.$$.$RANDOM.sh"; fi
   TMP_FILES="$TMP_FILES $f"
   printf '%s' "$f"
 }
 
-download_file() {
+download_file(){
   local url="$1" out="$2" sep="?" busted=""
   case "$url" in *\?*) sep="&";; esac
   busted="${url}${sep}t=$(date +%s)"
@@ -116,7 +110,7 @@ download_file() {
   chmod +x "$out"
 }
 
-patch_main_installer() {
+patch_main_installer(){
   local f="$1"
   [ -f "$f" ] || return 0
   ensure_python3 || true
@@ -127,37 +121,87 @@ import sys
 p = sys.argv[1]
 s = open(p, 'r', encoding='utf-8').read()
 
-s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动使用/续期/同步"')
-s = s.replace('echo "  5) 检测本地证书并选择路径复用"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
-s = s.replace('echo "  5) 检测本地证书并自动同步到运行目录"', 'echo "  5) 检测本地证书并自动使用/续期/同步"')
-s = s.replace('read -r -p "输入序号 [4]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}', 'read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}')
-s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
-s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
-s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动使用/续期/同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+collect_inputs = r'''collect_inputs(){
+  if [ "${CERT_MODE:-}" = "5" ]; then
+    info "已选择本地证书扫描，先跳过域名输入，稍后从证书自动识别。"
+  else
+    ask DOMAIN "请输入域名，例如 anytls.example.com"
+  fi
+  while true; do ask PORT "请输入监听端口" 443; valid_port "$PORT" && break; warn "端口必须是 1-65535"; done
+  ask USER_NAME "请输入用户标识" user1
+  ask_secret PASSWORD "请输入密码" "$(rand_secret)"
+  if [ "$PROTOCOL" = tuic ]; then ask UUID_VALUE "请输入 TUIC UUID" "$(make_uuid)"; fi
+}
+'''
+s = re.sub(r'collect_inputs\(\)\{.*?\n\}', collect_inputs, s, flags=re.S)
 
-helper = r'''
-share_insecure_flag(){ [ "$SKIP_CERT_VERIFY" = true ] && echo 1 || echo 0; }
+cert_funcs = r'''choose_cert_mode(){
+  echo
+  echo "请选择证书方式："
+  echo "  1) 自签证书"
+  echo "  2) 自定义证书路径"
+  echo "  3) 80 端口申请 Let's Encrypt"
+  echo "  4) Cloudflare DNS 验证证书"
+  echo "  5) 先扫描本机证书，自动识别域名并使用/续期/同步"
+  read -r -p "输入序号 [5]: " CERT_MODE
+  CERT_MODE=${CERT_MODE:-5}
+}
+
+choose_cert(){
+  local out selected_domain
+  [ -n "${CERT_MODE:-}" ] || choose_cert_mode
+  case "$CERT_MODE" in
+    1)
+      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
+      self_cert
+      ;;
+    2)
+      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
+      custom_cert
+      ;;
+    3)
+      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
+      issue_80
+      ;;
+    4)
+      [ -n "$DOMAIN" ] || ask DOMAIN "请输入域名，例如 anytls.example.com"
+      issue_cf
+      ;;
+    5)
+      out="$(mktemp /tmp/mihomo-anytls-cert-select.XXXXXX.env)"
+      if curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh?t=$(date +%s)" | bash -s -- "" "$CERT_FILE" "$KEY_FILE" 15 "$out"; then
+        if [ -f "$out" ]; then
+          # shellcheck disable=SC1090
+          . "$out"
+          selected_domain="${SELECTED_DOMAIN:-}"
+          [ -n "$selected_domain" ] && DOMAIN="$selected_domain"
+        fi
+        rm -f "$out"
+        [ -n "$DOMAIN" ] || die "已选择证书，但没有识别到域名。"
+        SKIP_CERT_VERIFY=false
+      else
+        rm -f "$out"
+        die "本机未找到可用证书。请重新运行后选择 3) 80端口申请 或 4) Cloudflare DNS 验证。"
+      fi
+      ;;
+    *) die "无效证书方式" ;;
+  esac
+}
+'''
+s = re.sub(r'choose_cert\(\)\{.*?\n\}', cert_funcs, s, flags=re.S)
+
+helper = r'''share_insecure_flag(){ [ "$SKIP_CERT_VERIFY" = true ] && echo 1 || echo 0; }
 
 build_share_link(){
   local insecure tag
   insecure="$(share_insecure_flag)"
   tag="$DOMAIN-$PORT"
   case "$PROTOCOL" in
-    anytls)
-      printf 'anytls://%s@%s:%s?peer=%s&insecure=%s&sni=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$DOMAIN" "$tag"
-      ;;
-    hysteria2)
-      printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
-      ;;
-    tuic)
-      printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&sni=%s&allow_insecure=%s#%s\n' "$UUID_VALUE" "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
-      ;;
-    trojan)
-      printf 'trojan://%s@%s:%s?sni=%s&allowInsecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag"
-      ;;
-    *)
-      printf '暂不支持该协议分享链接: %s\n' "$PROTOCOL"
-      ;;
+    anytls) printf 'anytls://%s@%s:%s?peer=%s&insecure=%s&sni=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$DOMAIN" "$tag" ;;
+    hysteria2) printf 'hysteria2://%s@%s:%s?sni=%s&insecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag" ;;
+    tuic) printf 'tuic://%s:%s@%s:%s?congestion_control=bbr&sni=%s&allow_insecure=%s#%s\n' "$UUID_VALUE" "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag" ;;
+    trojan) printf 'trojan://%s@%s:%s?sni=%s&allowInsecure=%s#%s\n' "$PASSWORD" "$DOMAIN" "$PORT" "$DOMAIN" "$insecure" "$tag" ;;
+    *) printf '暂不支持该协议分享链接: %s\n' "$PROTOCOL" ;;
   esac
 }
 
@@ -188,65 +232,32 @@ summary(){
   warn "Cloudflare DNS 记录建议关闭橙色云朵，使用 DNS only。"
 }
 '''
+s = re.sub(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
 
-s2, n = re.subn(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
-if n:
-    s = s2
+s = s.replace('choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; collect_inputs; choose_cert; write_config', 'choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; choose_cert_mode; collect_inputs; choose_cert; write_config')
 s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
 open(p, 'w', encoding='utf-8').write(s)
 PY
 }
 
-run_remote_script() {
+run_remote_script(){
   local url="$1" f
   shift || true
   f="$(make_tmp)"
   download_file "$url" "$f"
-  if [ "$url" = "$MAIN_URL" ]; then
-    patch_main_installer "$f"
-  fi
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    bash "$f" "$@" < /dev/tty
-  else
-    bash "$f" "$@"
-  fi
+  if [ "$url" = "$MAIN_URL" ]; then patch_main_installer "$f"; fi
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then bash "$f" "$@" < /dev/tty; else bash "$f" "$@"; fi
 }
 
-install_or_update_node() {
-  ensure_crontab || true
-  run_remote_script "$MAIN_URL"
-}
+install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
+show_nodes(){ run_remote_script "$SHOW_URL"; }
+install_nginx_site(){ run_remote_script "$NGINX_URL"; }
 
-show_nodes() { run_remote_script "$SHOW_URL"; }
-install_nginx_site() { run_remote_script "$NGINX_URL"; }
-
-default_domain() {
-  for env in /etc/mihomo/install.env /etc/sing-box/install.env; do
-    [ -f "$env" ] || continue
-    sed -n 's/^DOMAIN="\{0,1\}\([^" ]*\)"\{0,1\}$/\1/p' "$env" | head -n 1
-    return 0
-  done
-}
-
-detect_core() {
-  if [ -f /etc/mihomo/install.env ]; then echo mihomo; return 0; fi
-  if [ -f /etc/sing-box/install.env ]; then echo sing-box; return 0; fi
-  echo mihomo
-}
-
-repair_local_cert() {
-  local domain core default target_cert target_key
-  default="$(default_domain || true)"
-  if [ -n "$default" ]; then
-    read -r -p "请输入域名 [$default]: " domain
-    domain="${domain:-$default}"
-  else
-    read -r -p "请输入域名: " domain
-  fi
-  [ -n "$domain" ] || { echo "域名不能为空。" >&2; return 1; }
-
-  read -r -p "同步到哪个内核 [mihomo/sing-box] [$(detect_core)]: " core
-  core="${core:-$(detect_core)}"
+repair_local_cert(){
+  local domain core target_cert target_key
+  read -r -p "请输入域名，可留空自动扫描本机证书: " domain
+  read -r -p "同步到哪个内核 [mihomo/sing-box] [mihomo]: " core
+  core="${core:-mihomo}"
   case "$core" in
     mihomo) target_cert="/etc/mihomo/certs/fullchain.pem"; target_key="/etc/mihomo/certs/key.pem" ;;
     sing-box|singbox) target_cert="/etc/sing-box/certs/fullchain.pem"; target_key="/etc/sing-box/certs/key.pem" ;;
@@ -255,91 +266,42 @@ repair_local_cert() {
   run_remote_script "$CERT_AUTO_URL" "$domain" "$target_cert" "$target_key"
 }
 
-manage_cert_pool() { run_remote_script "$CERT_POOL_URL"; }
-configure_outbound() { run_remote_script "$OUTBOUND_URL"; }
-manage_self_update() { run_remote_script "$SELF_UPDATE_URL"; }
-uninstall_tool() { run_remote_script "$UNINSTALL_URL"; }
+manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
+configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
+manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
+uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
-service_status() {
+service_status(){
   echo "============================================================"
   echo " 服务状态"
   echo "============================================================"
-
   if has docker; then
     echo "Docker 容器："
     docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | grep -E 'NAMES|mihomo-anytls|sing-box-|sing-box' || echo "  未发现 mihomo-anytls / sing-box 相关容器"
   else
     echo "Docker: 未安装或不可用"
   fi
-
-  echo
-  echo "systemd 服务："
-  if has systemctl; then
-    for s in mihomo sing-box nginx; do
-      if systemctl list-unit-files "$s.service" >/dev/null 2>&1; then
-        printf '  %-10s ' "$s"
-        systemctl is-active "$s" 2>/dev/null || true
-      fi
-    done
-  else
-    echo "  systemctl 不可用"
-  fi
-
   echo
   echo "证书自动续期："
   [ -f /etc/cron.d/mihomo-anytls-cert-renew ] && cat /etc/cron.d/mihomo-anytls-cert-renew || echo "  未安装"
-
   echo
   echo "端口监听："
-  if has ss; then
-    ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090)\b' || echo "  未发现 80/443/7890/9090 监听"
-  elif has netstat; then
-    netstat -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090)\b' || echo "  未发现 80/443/7890/9090 监听"
-  else
-    echo "  ss/netstat 不可用"
+  if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090)\b' || echo "  未发现 80/443/7890/9090 监听"; fi
+}
+
+restart_services(){
+  if has docker; then
+    docker restart mihomo-anytls >/dev/null 2>&1 && echo "已重启 Docker: mihomo-anytls" || true
+    for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true; done
+  fi
+  if has systemctl; then
+    systemctl restart mihomo >/dev/null 2>&1 && echo "已重启 systemd: mihomo" || true
+    systemctl restart sing-box >/dev/null 2>&1 && echo "已重启 systemd: sing-box" || true
+    systemctl restart nginx >/dev/null 2>&1 && echo "已重启 systemd: nginx" || true
   fi
 }
 
-restart_services() {
-  local choice
-  echo "请选择重启范围："
-  echo "  1) 重启节点服务"
-  echo "  2) 重启 Nginx 静态站"
-  echo "  3) 全部重启"
-  echo "  0) 返回"
-  read -r -p "输入序号 [1]: " choice
-  choice="${choice:-1}"
-
-  case "$choice" in
-    1|3)
-      if has docker; then
-        docker restart mihomo-anytls >/dev/null 2>&1 && echo "已重启 Docker: mihomo-anytls" || true
-        for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do
-          docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true
-        done
-      fi
-      if has systemctl; then
-        systemctl restart mihomo >/dev/null 2>&1 && echo "已重启 systemd: mihomo" || true
-        systemctl restart sing-box >/dev/null 2>&1 && echo "已重启 systemd: sing-box" || true
-      fi
-      ;;&
-    2|3)
-      if has systemctl; then
-        systemctl restart nginx >/dev/null 2>&1 && echo "已重启 systemd: nginx" || true
-      elif has rc-service; then
-        rc-service nginx restart >/dev/null 2>&1 && echo "已重启 OpenRC: nginx" || true
-      elif [ -x /etc/init.d/nginx ]; then
-        /etc/init.d/nginx restart >/dev/null 2>&1 && echo "已重启 init.d: nginx" || true
-      elif has nginx; then
-        nginx -s reload >/dev/null 2>&1 && echo "已 reload nginx" || true
-      fi
-      ;;
-    0) return 0 ;;
-    *) echo "无效操作：$choice" >&2; return 1 ;;
-  esac
-}
-
-menu() {
+menu(){
   local action
   echo "============================================================"
   echo " mihomo-anytls 统一管理菜单"
@@ -359,7 +321,6 @@ menu() {
   echo "  0) 退出"
   read -r -p "输入序号 [1]: " action
   action="${action:-1}"
-
   case "$action" in
     1) install_or_update_node ;;
     2) show_nodes ;;
@@ -376,7 +337,7 @@ menu() {
   esac
 }
 
-main() {
+main(){
   need_root
   case "${1:-}" in
     --install|install|node) install_or_update_node ;;
