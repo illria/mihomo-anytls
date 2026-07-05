@@ -3,7 +3,6 @@ set -Eeuo pipefail
 
 CERT_ROOT="/root/cert"
 ACME="/root/.acme.sh/acme.sh"
-BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 
 red='\033[0;31m'
 green='\033[0;32m'
@@ -11,19 +10,16 @@ yellow='\033[0;33m'
 plain='\033[0m'
 
 info(){ printf "${green}[INFO]${plain} %s\n" "$*"; }
-warn(){ printf "${yellow}[WARN]${plain} %s\n" "$*"; }
+warn(){ printf "${yellow}[WARN]${plain} %s\n" "$*" >&2; }
 err(){ printf "${red}[ERR ]${plain} %s\n" "$*" >&2; }
 has(){ command -v "$1" >/dev/null 2>&1; }
-
 need_root(){ [ "${EUID:-$(id -u)}" -eq 0 ] || { err "请用 root 运行。"; exit 1; }; }
+is_domain(){ [[ "${1:-}" =~ ^([A-Za-z0-9](-*[A-Za-z0-9])*\.)+(xn--[a-z0-9]{2,}|[A-Za-z]{2,})$ ]]; }
 
-is_domain(){ [[ "$1" =~ ^([A-Za-z0-9](-*[A-Za-z0-9])*\.)+(xn--[a-z0-9]{2,}|[A-Za-z]{2,})$ ]]; }
-
-acme_listen_flag(){
-  if ip -4 addr show scope global 2>/dev/null | grep -q 'inet '; then
-    echo ""
-  else
-    echo "--listen-v6"
+pause_back(){
+  echo
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    read -r -p "按回车返回 SSL Manager 菜单..." _ < /dev/tty || true
   fi
 }
 
@@ -36,6 +32,14 @@ install_acme(){
   cd /root || return 1
   curl -s https://get.acme.sh | sh
   [ -x "$ACME" ] || { err "acme.sh 安装失败。"; return 1; }
+}
+
+acme_listen_flag(){
+  if ip -4 addr show scope global 2>/dev/null | grep -q 'inet '; then
+    echo ""
+  else
+    echo "--listen-v6"
+  fi
 }
 
 cert_ok(){ [ -s "$1" ] && openssl x509 -in "$1" -noout >/dev/null 2>&1; }
@@ -86,12 +90,12 @@ detect_acme_mode(){
 reload_cmd_for_domain(){
   local domain="$1"
   cat <<EOF
-bash -c 'if [ -f /usr/local/bin/mihomo-anytls ]; then /usr/local/bin/mihomo-anytls ssl-sync ${domain} >/dev/null 2>&1 || true; fi; docker restart mihomo-anytls >/dev/null 2>&1 || true; systemctl restart mihomo >/dev/null 2>&1 || true; systemctl restart sing-box >/dev/null 2>&1 || true'
+bash -c 'docker restart mihomo-anytls >/dev/null 2>&1 || true; docker restart sing-box-anytls >/dev/null 2>&1 || true; docker restart sing-box-hysteria2 >/dev/null 2>&1 || true; docker restart sing-box-tuic >/dev/null 2>&1 || true; docker restart sing-box-trojan >/dev/null 2>&1 || true; systemctl restart mihomo >/dev/null 2>&1 || true; systemctl restart sing-box >/dev/null 2>&1 || true'
 EOF
 }
 
 install_cert_to_root_cert(){
-  local domain="$1" mode reload cert key out rc
+  local domain="$1" mode reload cert key
   [ -n "$domain" ] && is_domain "$domain" || { err "域名无效: $domain"; return 1; }
   install_acme || return 1
   mkdir -p "$(cert_dir "$domain")"
@@ -102,12 +106,12 @@ install_cert_to_root_cert(){
   info "按 3x-ui 模型安装证书到: $(cert_dir "$domain")"
   info "fullchain: $cert"
   info "privkey:   $key"
+  info "执行 acme.sh install-cert，不再调用交互式 en-mi，避免卡住。"
   if [ "$mode" = "ecc" ]; then
-    out="$($ACME --install-cert --force --ecc -d "$domain" --key-file "$key" --fullchain-file "$cert" --reloadcmd "$reload" 2>&1)" || rc=$?
+    "$ACME" --install-cert --force --ecc -d "$domain" --key-file "$key" --fullchain-file "$cert" --reloadcmd "$reload"
   else
-    out="$($ACME --install-cert --force -d "$domain" --key-file "$key" --fullchain-file "$cert" --reloadcmd "$reload" 2>&1)" || rc=$?
+    "$ACME" --install-cert --force -d "$domain" --key-file "$key" --fullchain-file "$cert" --reloadcmd "$reload"
   fi
-  printf '%s\n' "$out"
   pair_ok "$cert" "$key" || { err "install-cert 后证书/私钥仍不可用。"; return 1; }
   chmod 644 "$cert"
   chmod 600 "$key"
@@ -123,15 +127,15 @@ issue_http(){
   read -r -p "HTTP-01 端口 [80]: " port
   port="${port:-80}"
   install_acme || return 1
-  $ACME --register-account -m "$email" --server letsencrypt --force || true
-  $ACME --set-default-ca --server letsencrypt --force
+  "$ACME" --register-account -m "$email" --server letsencrypt --force || true
+  "$ACME" --set-default-ca --server letsencrypt --force
   info "开始 HTTP-01 签发: $domain"
-  $ACME --issue -d "$domain" --standalone --httpport "$port" $(acme_listen_flag) --keylength ec-256 --server letsencrypt --force
+  "$ACME" --issue -d "$domain" --standalone --httpport "$port" $(acme_listen_flag) --keylength ec-256 --server letsencrypt --force
   install_cert_to_root_cert "$domain"
 }
 
 issue_cf(){
-  local domain keytype token email gkey reload cert key
+  local domain keytype token email gkey
   read -r -p "请输入根域名，例如 example.com: " domain
   is_domain "$domain" || { err "域名无效。"; return 1; }
   read -r -p "使用 Cloudflare API Token 还是 Global Key? [t/g] [t]: " keytype
@@ -146,9 +150,9 @@ issue_cf(){
     export CF_Token="$token"
   fi
   install_acme || return 1
-  $ACME --set-default-ca --server letsencrypt --force
+  "$ACME" --set-default-ca --server letsencrypt --force
   info "开始 Cloudflare DNS 签发: $domain 和 *.${domain}"
-  $ACME --issue --dns dns_cf -d "$domain" -d "*.${domain}" --keylength ec-256 --server letsencrypt --force
+  "$ACME" --issue --dns dns_cf -d "$domain" -d "*.${domain}" --log --keylength ec-256 --server letsencrypt --force
   install_cert_to_root_cert "$domain"
 }
 
@@ -176,11 +180,7 @@ list_certs(){
   done
   echo "------------------------------------------------------------"
   echo "acme.sh 记录："
-  if [ -x "$ACME" ]; then
-    $ACME --list || true
-  else
-    warn "acme.sh 未安装。"
-  fi
+  if [ -x "$ACME" ]; then "$ACME" --list || true; else warn "acme.sh 未安装。"; fi
 }
 
 force_renew(){
@@ -191,9 +191,9 @@ force_renew(){
   mode="$(detect_acme_mode "$domain")"
   info "强制续期: $domain ($mode)"
   if [ "$mode" = "ecc" ]; then
-    $ACME --renew -d "$domain" --ecc --force || $ACME --issue -d "$domain" --standalone --keylength ec-256 --server letsencrypt --force
+    "$ACME" --renew -d "$domain" --ecc --force || "$ACME" --issue -d "$domain" --standalone --keylength ec-256 --server letsencrypt --force
   else
-    $ACME --renew -d "$domain" --force || $ACME --issue -d "$domain" --standalone --server letsencrypt --force
+    "$ACME" --renew -d "$domain" --force || "$ACME" --issue -d "$domain" --standalone --server letsencrypt --force
   fi
   install_cert_to_root_cert "$domain"
 }
@@ -203,14 +203,14 @@ revoke_remove(){
   read -r -p "请输入要撤销并删除的域名: " domain
   is_domain "$domain" || { err "域名无效。"; return 1; }
   install_acme || true
-  $ACME --revoke -d "$domain" --ecc 2>/dev/null || $ACME --revoke -d "$domain" 2>/dev/null || true
-  $ACME --remove -d "$domain" --ecc 2>/dev/null || $ACME --remove -d "$domain" 2>/dev/null || true
+  "$ACME" --revoke -d "$domain" --ecc 2>/dev/null || "$ACME" --revoke -d "$domain" 2>/dev/null || true
+  "$ACME" --remove -d "$domain" --ecc 2>/dev/null || "$ACME" --remove -d "$domain" 2>/dev/null || true
   rm -rf "/root/.acme.sh/${domain}" "/root/.acme.sh/${domain}_ecc" "$(cert_dir "$domain")"
   info "已删除: $domain"
 }
 
 sync_runtime(){
-  local domain core cert key target_cert target_key pool
+  local domain core cert key target_cert target_key
   read -r -p "请输入 /root/cert 下的域名: " domain
   cert="$(cert_file "$domain")"
   key="$(key_file "$domain")"
@@ -250,7 +250,7 @@ repair_existing_acme(){
   install_cert_to_root_cert "$domain"
 }
 
-menu(){
+menu_once(){
   local c
   echo "============================================================"
   echo " SSL Manager（参考 3x-ui 模型）"
@@ -278,6 +278,13 @@ menu(){
   esac
 }
 
+menu_loop(){
+  while true; do
+    menu_once || true
+    pause_back
+  done
+}
+
 main(){
   need_root
   case "${1:-}" in
@@ -288,7 +295,7 @@ main(){
     renew) force_renew ;;
     sync) sync_runtime ;;
     revoke) revoke_remove ;;
-    *) menu ;;
+    *) menu_loop ;;
   esac
 }
 
