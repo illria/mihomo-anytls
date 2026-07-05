@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-cert-menu-patch-v2"
+INSTALLER_VERSION="2026-07-06-cert-auto-sync-v1"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
 NGINX_URL="$BASE_URL/tools/install-nginx-static-site.sh"
 CERT_URL="$BASE_URL/tools/cert-finder.sh"
+CERT_AUTO_URL="$BASE_URL/tools/cert-auto-use.sh"
 OUTBOUND_URL="$BASE_URL/tools/configure-outbound-proxy.sh"
 TMP_FILES=""
 PKG_MANAGER="unknown"
@@ -100,22 +101,23 @@ download_file() {
 patch_main_installer() {
   local f="$1"
   [ -f "$f" ] || return 0
-  grep -q '检测本地证书并选择路径复用' "$f" && return 0
 
   python3 - "$f" <<'PY' 2>/dev/null || true
 import sys
 p = sys.argv[1]
 s = open(p, 'r', encoding='utf-8').read()
-s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"')
+s = s.replace('echo "  4) Cloudflare DNS 验证证书"', 'echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动同步到运行目录"')
+s = s.replace('echo "  5) 检测本地证书并选择路径复用"', 'echo "  5) 检测本地证书并自动同步到运行目录"')
 s = s.replace('read -r -p "输入序号 [4]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}', 'read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}')
-s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac')
+s = s.replace('4) issue_cf;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
+s = s.replace('4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac', '4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac')
 open(p, 'w', encoding='utf-8').write(s)
 PY
 
-  if ! grep -q '检测本地证书并选择路径复用' "$f"; then
-    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并选择路径复用"#' "$f" || true
+  if ! grep -q 'cert-auto-use.sh' "$f"; then
+    sed -i 's#echo "  4) Cloudflare DNS 验证证书"#echo "  4) Cloudflare DNS 验证证书"; echo "  5) 检测本地证书并自动同步到运行目录"#' "$f" || true
     sed -i 's#read -r -p "输入序号 \[4\]: " CERT_MODE; CERT_MODE=${CERT_MODE:-4}#read -r -p "输入序号 [5]: " CERT_MODE; CERT_MODE=${CERT_MODE:-5}#' "$f" || true
-    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-finder.sh | bash -s -- "$DOMAIN" || true); custom_cert;; *) die "无效证书方式";; esac#' "$f" || true
+    sed -i 's#4) issue_cf;; \*) die "无效证书方式";; esac#4) issue_cf;; 5) (curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh | bash -s -- "$DOMAIN" "$CERT_FILE" "$KEY_FILE") || die "本地证书自动同步失败"; SKIP_CERT_VERIFY=false;; *) die "无效证书方式";; esac#' "$f" || true
   fi
 }
 
