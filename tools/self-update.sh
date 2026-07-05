@@ -3,36 +3,39 @@ set -Eeuo pipefail
 
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 INSTALL_URL="$BASE_URL/install.sh"
-BIN_PATH="/usr/local/bin/mihomo-anytls"
+BIN_MAIN="/usr/local/bin/mihomo-anytls"
+BIN_SHORT="/usr/local/bin/en-mi"
 CRON_FILE="/etc/cron.d/mihomo-anytls-self-update"
 
-info(){ printf '\033[1;32m[INFO]\033[0m %s\n' "$*"; }
-warn(){ printf '\033[1;33m[WARN]\033[0m %s\n' "$*"; }
-err(){ printf '\033[1;31m[ERR ]\033[0m %s\n' "$*" >&2; }
+info(){ printf '[INFO] %s\n' "$*"; }
+warn(){ printf '[WARN] %s\n' "$*"; }
+err(){ printf '[ERR ] %s\n' "$*" >&2; }
 die(){ err "$*"; exit 1; }
 has(){ command -v "$1" >/dev/null 2>&1; }
-
 need_root(){ [ "${EUID:-$(id -u)}" -eq 0 ] || die "请用 root 运行。"; }
 
-download(){
-  local url="$1" out="$2" busted
-  busted="${url}?t=$(date +%s)"
+download_install(){
+  local out="$1" url
+  url="${INSTALL_URL}?t=$(date +%s)"
   if has curl; then
-    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
+    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$url" -o "$out"
   elif has wget; then
-    wget --no-cache -qO "$out" "$busted"
+    wget --no-cache -qO "$out" "$url"
   else
     die "缺少 curl/wget。"
   fi
 }
 
 install_command(){
+  local tmp
   tmp="$(mktemp /tmp/mihomo-anytls-update.XXXXXX)"
   trap 'rm -f "$tmp"' EXIT
-  download "$INSTALL_URL" "$tmp"
-  install -m 755 "$tmp" "$BIN_PATH"
-  info "已安装/更新本机命令: $BIN_PATH"
-  echo "使用方式：mihomo-anytls"
+  download_install "$tmp"
+  install -m 755 "$tmp" "$BIN_MAIN"
+  install -m 755 "$tmp" "$BIN_SHORT"
+  info "已安装/更新主命令: $BIN_MAIN"
+  info "已安装/更新快捷命令: $BIN_SHORT"
+  info "以后可直接运行: en-mi"
 }
 
 install_cron(){
@@ -40,30 +43,32 @@ install_cron(){
   cat > "$CRON_FILE" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-17 4 * * * root curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "${INSTALL_URL}?t=\$(date +\%s)" -o ${BIN_PATH}.tmp && install -m 755 ${BIN_PATH}.tmp ${BIN_PATH} && rm -f ${BIN_PATH}.tmp
+17 4 * * * root bash -c 'tmp=\$(mktemp /tmp/mihomo-anytls.XXXXXX) && curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" "${INSTALL_URL}?t=\$(date +\%s)" -o "\$tmp" && install -m 755 "\$tmp" "$BIN_MAIN" && install -m 755 "\$tmp" "$BIN_SHORT" && rm -f "\$tmp"'
 EOF
   chmod 644 "$CRON_FILE"
-  info "已写入自动更新计划: $CRON_FILE"
-  info "默认每天 04:17 自动更新入口脚本。"
+  info "已启用每日自动更新: $CRON_FILE"
 }
 
 remove_cron(){
   rm -f "$CRON_FILE"
-  info "已删除自动更新计划: $CRON_FILE"
+  info "已关闭每日自动更新。"
 }
 
 status(){
-  echo "命令路径: $BIN_PATH"
-  [ -x "$BIN_PATH" ] && "$BIN_PATH" --status >/dev/null 2>&1 && echo "命令状态: 可执行" || echo "命令状态: 未安装或不可执行"
+  echo "主命令: $BIN_MAIN"
+  [ -x "$BIN_MAIN" ] && echo "  OK" || echo "  未安装"
+  echo "快捷命令: $BIN_SHORT"
+  [ -x "$BIN_SHORT" ] && echo "  OK" || echo "  未安装"
   echo "计划任务: $CRON_FILE"
-  [ -f "$CRON_FILE" ] && cat "$CRON_FILE" || echo "未启用自动更新计划"
+  [ -f "$CRON_FILE" ] && cat "$CRON_FILE" || echo "  未启用"
 }
 
 menu(){
   echo "============================================================"
   echo " mihomo-anytls 自动更新"
+  echo " 作者: Eianun"
   echo "============================================================"
-  echo "  1) 安装/更新本机命令"
+  echo "  1) 安装/更新本机命令 mihomo-anytls + en-mi"
   echo "  2) 启用每日自动更新"
   echo "  3) 关闭每日自动更新"
   echo "  4) 查看自动更新状态"
@@ -83,10 +88,11 @@ menu(){
 main(){
   need_root
   case "${1:-}" in
-    install|update|"") [ "${1:-}" = "" ] && menu || install_command ;;
+    install|update) install_command ;;
     cron|enable) install_cron ;;
     disable) remove_cron ;;
     status) status ;;
+    "") menu ;;
     *) menu ;;
   esac
 }
