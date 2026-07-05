@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-cert-first-installer-v1"
+INSTALLER_VERSION="2026-07-06-cert-center-menu-v1"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
 SHOW_URL="$BASE_URL/tools/show-node-info.sh"
 NGINX_URL="$BASE_URL/tools/install-nginx-static-site.sh"
 CERT_AUTO_URL="$BASE_URL/tools/cert-auto-use.sh"
+CERT_CENTER_URL="$BASE_URL/tools/cert-center.sh"
 CERT_POOL_URL="$BASE_URL/tools/cert-pool.sh"
 OUTBOUND_URL="$BASE_URL/tools/configure-outbound-proxy.sh"
 SELF_UPDATE_URL="$BASE_URL/tools/self-update.sh"
@@ -171,7 +172,6 @@ choose_cert(){
       out="$(mktemp /tmp/mihomo-anytls-cert-select.XXXXXX.env)"
       if curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "https://raw.githubusercontent.com/illria/mihomo-anytls/main/tools/cert-auto-use.sh?t=$(date +%s)" | bash -s -- "" "$CERT_FILE" "$KEY_FILE" 15 "$out"; then
         if [ -f "$out" ]; then
-          # shellcheck disable=SC1090
           . "$out"
           selected_domain="${SELECTED_DOMAIN:-}"
           [ -n "$selected_domain" ] && DOMAIN="$selected_domain"
@@ -233,7 +233,6 @@ summary(){
 }
 '''
 s = re.sub(r'\nsummary\(\)\{.*?\n\}\n\nmain\(\)\{', '\n' + helper + '\n\nmain(){', s, flags=re.S)
-
 s = s.replace('choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; collect_inputs; choose_cert; write_config', 'choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; choose_cert_mode; collect_inputs; choose_cert; write_config')
 s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
 open(p, 'w', encoding='utf-8').write(s)
@@ -252,6 +251,7 @@ run_remote_script(){
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
 show_nodes(){ run_remote_script "$SHOW_URL"; }
 install_nginx_site(){ run_remote_script "$NGINX_URL"; }
+certificate_center(){ run_remote_script "$CERT_CENTER_URL"; }
 
 repair_local_cert(){
   local domain core target_cert target_key
@@ -313,7 +313,7 @@ menu(){
   echo "  3) 安装 / 更新 Nginx 静态站"
   echo "  4) 查看服务状态"
   echo "  5) 重启服务"
-  echo "  6) 检测本地证书并自动使用 / 续期 / 同步"
+  echo "  6) 证书中心（状态清单 / 强制续期 / 同步）"
   echo "  7) 多节点证书池管理"
   echo "  8) 配置 HTTP / SOCKS5 出口代理"
   echo "  9) 自动更新脚本管理"
@@ -327,7 +327,7 @@ menu(){
     3) install_nginx_site ;;
     4) service_status ;;
     5) restart_services ;;
-    6) repair_local_cert ;;
+    6) certificate_center ;;
     7) manage_cert_pool ;;
     8) configure_outbound ;;
     9) manage_self_update ;;
@@ -343,7 +343,8 @@ main(){
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
     --nginx|nginx|site) install_nginx_site ;;
-    --cert|cert|certificate|repair-cert) repair_local_cert ;;
+    --cert|cert|certificate|cert-center) certificate_center ;;
+    --repair-cert|repair-cert) repair_local_cert ;;
     --cert-pool|cert-pool|pool) manage_cert_pool ;;
     --outbound|outbound|proxy) configure_outbound ;;
     --self-update|self-update|update-self) manage_self_update ;;
