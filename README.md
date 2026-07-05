@@ -68,12 +68,6 @@ AnyTLS 目标输出格式：
 anytls://PASSWORD@DOMAIN:PORT?peer=DOMAIN&insecure=0&sni=DOMAIN#NODE_NAME
 ```
 
-示例：
-
-```text
-anytls://96a8a7b5-4c4c-4f57-af2c-ecff73fdcd38@hostdzire.2004103.xyz:22064?peer=hostdzire.2004103.xyz&insecure=0&sni=hostdzire.2004103.xyz#hostdzire-20u-印度
-```
-
 说明：
 
 - `PASSWORD` 对应 AnyTLS 密码。
