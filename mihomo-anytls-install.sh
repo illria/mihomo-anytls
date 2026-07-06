@@ -160,7 +160,7 @@ start_docker(){
 }
 
 install_docker_by_linuxmirrors(){
-  local country source registry
+  local country source registry rc
   country="$(country_code)"
   if [ "$country" = "CN" ]; then
     source="mirrors.huaweicloud.com/docker-ce"
@@ -170,6 +170,7 @@ install_docker_by_linuxmirrors(){
     registry="registry.hub.docker.com"
   fi
   info "使用 linuxmirrors.cn/docker.sh 自动安装 Docker: source=$source registry=$registry"
+  set +e
   bash <(curl -fsSL https://linuxmirrors.cn/docker.sh) \
     --source "$source" \
     --source-registry "$registry" \
@@ -177,7 +178,16 @@ install_docker_by_linuxmirrors(){
     --use-intranet-source false \
     --install-latest true \
     --close-firewall false \
-    --ignore-backup-tips || true
+    --ignore-backup-tips 2>&1 | sed -u \
+      -e '/赞助商广告/d' \
+      -e '/linuxmirrors\.cn/d' \
+      -e '/更多使用教程详见官网/d'
+  rc=${PIPESTATUS[0]}
+  set -e
+  echo "✨ Docker 安装流程运行完毕"
+  echo "作者主页: https://github.com/illria"
+  echo "X / Twitter: https://x.com/Eianunbits"
+  return "$rc"
 }
 
 install_docker_by_getdocker(){
