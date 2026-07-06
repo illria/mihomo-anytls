@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-07-06-eianun-en-mi-ssl-manager-v2"
+INSTALLER_VERSION="2026-07-06-eianun-en-mi-ssl-manager-v3"
 AUTHOR="Eianun"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
@@ -167,6 +167,35 @@ choose_cert(){
 '''
 s = re.sub(r'choose_cert\(\)\{.*?\n\}', cert_funcs, s, flags=re.S)
 
+safe_write_config = r'''validate_generated_config(){
+  case "$CORE" in
+    mihomo)
+      grep -q '^listeners:' "$CONFIG_FILE" || die "mihomo 配置生成异常：未发现 listeners。"
+      grep -q 'type: anytls' "$CONFIG_FILE" || die "mihomo 配置生成异常：未发现 type: anytls。"
+      ;;
+    sing-box)
+      grep -q '"inbounds"' "$CONFIG_FILE" || die "sing-box 配置生成异常：未发现 inbounds。"
+      ;;
+    *) die "未知内核: $CORE" ;;
+  esac
+}
+
+write_config(){
+  case "$CORE" in
+    mihomo) write_mihomo_config ;;
+    sing-box) write_singbox_config ;;
+    *) die "未知内核: $CORE" ;;
+  esac
+  validate_generated_config
+  write_env
+}
+'''
+old_unsafe = 'write_config(){ [ "$CORE" = mihomo ] && write_mihomo_config || write_singbox_config; write_env; }'
+if old_unsafe in s:
+    s = s.replace(old_unsafe, safe_write_config)
+else:
+    s = re.sub(r'\nwrite_config\(\)\{.*?\}\n', '\n' + safe_write_config + '\n', s, count=1, flags=re.S)
+
 helper = r'''share_insecure_flag(){ [ "$SKIP_CERT_VERIFY" = true ] && echo 1 || echo 0; }
 
 build_share_link(){
@@ -216,6 +245,8 @@ s = s.replace(old_compose, new_compose)
 s = s.replace('docker build -t "$IMAGE_NAME" "$WORK_DIR"', 'docker_build_image || die "Docker 镜像构建失败：当前 VPS 的 Docker/procfs 可能不支持 build，请改用裸机 systemd 模式"')
 s = s.replace('choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; collect_inputs; choose_cert; write_config', 'choose_core; choose_install; choose_singbox_version; choose_protocol; prepare_paths; choose_cert_mode; collect_inputs; choose_cert; write_config')
 s = s.replace('firewall_hint; summary', 'firewall_hint; install_cert_renew_cron; summary')
+if old_unsafe in s:
+    raise SystemExit('unsafe write_config still present')
 open(p, 'w', encoding='utf-8').write(s)
 PY
 }
@@ -239,9 +270,41 @@ service_status(){
   echo; echo "端口监听："; if has ss; then ss -lntup 2>/dev/null | grep -E '(:80|:443|:7890|:9090|:22077|:32077|:42077)\b' || echo "  未发现常用端口监听"; fi
 }
 
+restart_one_from_env(){
+  local env="$1" core mode container service
+  [ -f "$env" ] || return 1
+  CORE="" INSTALL_MODE=""
+  . "$env"
+  core="${CORE:-}"; mode="${INSTALL_MODE:-}"
+  case "$core" in
+    mihomo) container="mihomo-anytls"; service="mihomo" ;;
+    sing-box) container="sing-box-${PROTOCOL:-anytls}"; service="sing-box" ;;
+    *) return 1 ;;
+  esac
+  if [ "$mode" = docker ]; then
+    if has docker && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq "$container"; then
+      docker restart "$container" >/dev/null 2>&1 && echo "已重启 Docker: $container"
+      return 0
+    fi
+  else
+    if has systemctl && systemctl list-unit-files --type=service 2>/dev/null | grep -q "^${service}\.service"; then
+      systemctl restart "$service" >/dev/null 2>&1 && echo "已重启 systemd: $service"
+      return 0
+    fi
+  fi
+  return 1
+}
+
 restart_services(){
-  if has docker; then docker restart mihomo-anytls >/dev/null 2>&1 && echo "已重启 Docker: mihomo-anytls" || true; for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true; done; fi
-  if has systemctl; then systemctl restart mihomo >/dev/null 2>&1 && echo "已重启 systemd: mihomo" || true; systemctl restart sing-box >/dev/null 2>&1 && echo "已重启 systemd: sing-box" || true; systemctl restart nginx >/dev/null 2>&1 && echo "已重启 systemd: nginx" || true; fi
+  local did=0 c
+  restart_one_from_env /etc/mihomo/install.env && did=1 || true
+  restart_one_from_env /etc/sing-box/install.env && did=1 || true
+  if [ "$did" -eq 0 ] && has docker; then
+    for c in mihomo-anytls $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^sing-box' || true); do
+      docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Fxq "$c" || continue
+      docker restart "$c" >/dev/null 2>&1 && echo "已重启 Docker: $c" || true
+    done
+  fi
 }
 
 menu(){
