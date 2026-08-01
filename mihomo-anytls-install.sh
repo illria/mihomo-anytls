@@ -422,7 +422,28 @@ CERT_FILE="$CERT_FILE"
 KEY_FILE="$KEY_FILE"
 EOF
 chmod 600 "$ENV_FILE" "$CONFIG_FILE" "$CLIENT_MIHOMO_FILE" "$CLIENT_SINGBOX_FILE"; }
-write_config(){ [ "$CORE" = mihomo ] && write_mihomo_config || write_singbox_config; write_env; }
+validate_generated_config(){
+  case "$CORE" in
+    mihomo)
+      grep -q '^listeners:' "$CONFIG_FILE" || die "mihomo 配置生成异常：未发现 listeners。"
+      grep -q 'type: anytls' "$CONFIG_FILE" || die "mihomo 配置生成异常：未发现 type: anytls。"
+      ;;
+    sing-box)
+      grep -q '"inbounds"' "$CONFIG_FILE" || die "sing-box 配置生成异常：未发现 inbounds。"
+      ;;
+    *) die "未知内核: $CORE" ;;
+  esac
+}
+
+write_config(){
+  case "$CORE" in
+    mihomo) write_mihomo_config ;;
+    sing-box) write_singbox_config ;;
+    *) die "未知内核: $CORE" ;;
+  esac
+  validate_generated_config
+  write_env
+}
 
 install_systemd(){ [ "$INIT_SYSTEM" = systemd ] || die "裸机模式需要 systemd"; if [ "$CORE" = mihomo ]; then download_mihomo "$BIN_PATH"; cat > "$SERVICE_FILE" <<EOF
 [Unit]
