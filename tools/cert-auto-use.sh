@@ -8,6 +8,8 @@ WARN_DAYS="${4:-15}"
 OUT_ENV="${5:-}"
 POOL_DIR="/etc/mihomo-anytls/cert-pool"
 ROOT_CERT_DIR="/root/cert"
+SELECTION_ONLY=false
+[ -n "$OUT_ENV" ] && SELECTION_ONLY=true
 
 info(){ printf '[INFO] %s\n' "$*"; }
 warn(){ printf '[WARN] %s\n' "$*" >&2; }
@@ -75,7 +77,7 @@ concrete_for_domain(){
       while true; do
         ask ans "请输入具体节点域名，例如 node.$base" "node.$base"
         case "$ans" in
-          \*.*|"" ) warn "不能使用通配符或空域名。" ;;
+          \*.*|"") warn "不能使用通配符或空域名。" ;;
           *.$base) printf '%s' "$ans"; return 0 ;;
           *) warn "输入的域名必须是 *.$base 下面的具体子域名。" ;;
         esac
@@ -124,7 +126,7 @@ source_candidates(){
   local dir d key cert
   for dir in /root/.acme.sh/*_ecc; do
     [ -d "$dir" ] || continue
-    d="$(basename "$dir")"; d="${d%_cc}"; d="${d%_ecc}"
+    d="$(basename "$dir")"; d="${d%_ecc}"
     key="$dir/${d}.key"
     cert="$(acme_cert_in_dir "$dir" "$d" || true)"
     [ -n "$cert" ] && emit_cert "$cert" "$key" acme.sh-ecc || emit_acme_record "$dir" "$d" "$key" acme-record-ecc || true
@@ -211,16 +213,15 @@ EOF
   info "运行证书副本: $TARGET_CERT"
 }
 
-renew_acme_record(){
+renew_acme_cert(){
   local dir="$1" d="$2" key="$3" source="$4" acme cert
   acme="/root/.acme.sh/acme.sh"
   [ -x "$acme" ] || { err "未找到 acme.sh: $acme"; return 1; }
-  DOMAIN="${DOMAIN:-$d}"
-  info "按 acme.sh 原始记录强制续期: $DOMAIN"
+  info "按 acme.sh 原始记录尝试正常续期（非强制）: $d"
   if [ "$source" = acme.sh-ecc ]; then
-    "$acme" --renew -d "$d" --ecc --force || "$acme" --issue -d "$d" --standalone --keylength ec-256 --server letsencrypt --force || return 1
+    "$acme" --renew -d "$d" --ecc || return 1
   else
-    "$acme" --renew -d "$d" --force || "$acme" --issue -d "$d" --standalone --server letsencrypt --force || return 1
+    "$acme" --renew -d "$d" || return 1
   fi
   cert="$(acme_cert_in_dir "$dir" "$d" || true)"
   [ -f "$cert" ] || { err "续期后仍未找到证书文件: $dir"; return 1; }
@@ -230,11 +231,25 @@ renew_acme_record(){
 renew_cert(){
   local cert="$1" key="$2" source="$3" dir d
   case "$source" in
-    acme-record-ecc) dir="${cert#ACME_RECORD:}"; d="$(basename "$dir")"; d="${d%_ecc}"; renew_acme_record "$dir" "$d" "$key" acme.sh-ecc ;;
-    acme-record) dir="${cert#ACME_RECORD:}"; d="$(basename "$dir")"; renew_acme_record "$dir" "$d" "$key" acme.sh ;;
-    acme.sh-ecc|acme.sh) dir="$(dirname "$cert")"; d="$(basename "$dir")"; d="${d%_ecc}"; renew_acme_record "$dir" "$d" "$key" "$source" ;;
-    certbot) command -v certbot >/dev/null 2>&1 || return 1; certbot renew --cert-name "$DOMAIN" --force-renewal || certbot renew --force-renewal || return 1; install_pair "$cert" "$key" "$source" ;;
-    mihomo-runtime|sing-box-runtime) warn "运行目录只是副本，不作为续期源。请优先选择 acme.sh / certbot 原始源。"; return 1 ;;
+    acme-record-ecc|acme-record)
+      warn "只有 acme.sh 记录但没有证书文件；自动扫描不会续期或重新签发。"
+      return 1
+      ;;
+    acme.sh-ecc|acme.sh)
+      dir="$(dirname "$cert")"
+      d="$(basename "$dir")"; d="${d%_ecc}"
+      renew_acme_cert "$dir" "$d" "$key" "$source"
+      ;;
+    certbot)
+      command -v certbot >/dev/null 2>&1 || return 1
+      d="$(basename "$(dirname "$cert")")"
+      certbot renew --cert-name "$d" || return 1
+      install_pair "$cert" "$key" "$source"
+      ;;
+    mihomo-runtime|sing-box-runtime)
+      warn "运行目录只是副本，不作为续期源。请优先选择 acme.sh / certbot 原始源。"
+      return 1
+      ;;
     *) return 1 ;;
   esac
 }
@@ -249,20 +264,51 @@ use_line(){
   dom="${rest%%|*}"; rest="${rest#*|}"
   days="${rest%%|*}"; domains="${rest#*|}"
   DOMAIN="${DOMAIN:-$dom}"
-  [ -f "$cert" ] && ! match_domain "$cert" "$DOMAIN" && DOMAIN="$dom"
-  [ ! -f "$cert" ] && DOMAIN="$dom"
+
+  if [[ "$cert" == ACME_RECORD:* ]] || [ ! -f "$cert" ]; then
+    echo "------------------------------------------------------------"
+    info "证书记录域名: $dom"
+    info "来源: $source"
+    info "记录: $cert"
+    warn "该项只有 acme.sh 记录，没有可用证书文件。"
+    warn "本地证书扫描不会自动续期、强制续期或重新签发。"
+    warn "请先在 SSL Manager 中修复/签发证书，再重新选择。"
+    return 1
+  fi
+
+  ! match_domain "$cert" "$DOMAIN" && DOMAIN="$dom"
   real_domain="$(concrete_for_domain "$DOMAIN" "$domains")"
   DOMAIN="$real_domain"
   echo "------------------------------------------------------------"
   info "使用域名: $DOMAIN"
   info "证书域名: $dom"
   info "来源: $source"
-  info "证书/记录: $cert"
+  info "证书: $cert"
   info "私钥: $key"
   info "剩余天数: $days"
   case "$source" in *runtime) warn "这是运行目录副本，只能兜底复用，不能作为自动续期源。";; esac
-  if [ -f "$cert" ] && numeric_gt "$days" "$WARN_DAYS"; then install_pair "$cert" "$key" "$source"; exit 0; fi
-  renew_cert "$cert" "$key" "$source" && exit 0
+
+  if [ "$SELECTION_ONLY" = true ]; then
+    numeric_gt "$days" 0 || { err "证书已过期或无法读取有效期，不能用于安装。"; return 1; }
+    numeric_gt "$days" "$WARN_DAYS" || warn "证书剩余 $days 天，本次只使用现有证书，不执行续期。"
+    install_pair "$cert" "$key" "$source"
+    exit 0
+  fi
+
+  if numeric_gt "$days" "$WARN_DAYS"; then
+    install_pair "$cert" "$key" "$source"
+    exit 0
+  fi
+
+  if renew_cert "$cert" "$key" "$source"; then
+    exit 0
+  fi
+
+  if numeric_gt "$days" 0; then
+    warn "正常续期未成功，继续同步当前尚未过期的证书。"
+    install_pair "$cert" "$key" "$source"
+    exit 0
+  fi
   return 1
 }
 
@@ -271,15 +317,20 @@ choose_line(){
   count="$(printf '%s\n' "$list" | sed '/^$/d' | wc -l | awk '{print $1}')"
   [ "$count" -gt 0 ] || return 1
   warn "原始证书源优先；/etc/mihomo 和 /etc/sing-box 运行目录只作为最后兜底。"
+  warn "仅有 acme.sh 记录但缺少证书文件的项目不会自动续期。"
   echo "发现证书/记录："
   i=1
   printf '%s\n' "$list" | sed '/^$/d' | while IFS='|' read -r cert key source dom days domains; do
     label="$source"
-    case "$source" in acme*|certbot) label="$source 原始源" ;; *runtime) label="$source 运行副本/兜底" ;; esac
+    case "$source" in
+      acme-record*) label="$source 仅记录/证书缺失（不可直接使用）" ;;
+      acme*|certbot) label="$source 原始源" ;;
+      *runtime) label="$source 运行副本/兜底" ;;
+    esac
     printf '  %s) %s  剩余天数=%s  来源=%s\n     %s\n' "$i" "$dom" "$days" "$label" "$cert"
     i=$((i+1))
   done
-  default_choice="$(printf '%s\n' "$list" | sed '/^$/d' | awk -F'|' '$3 !~ /runtime/ {print NR; exit}')"
+  default_choice="$(printf '%s\n' "$list" | sed '/^$/d' | awk -F'|' '$1 !~ /^ACME_RECORD:/ && $3 !~ /runtime/ {print NR; exit}')"
   default_choice="${default_choice:-1}"
   [ "$count" -eq 1 ] && choice=1 || ask choice "请选择要使用的证书/记录序号" "$default_choice"
   line="$(printf '%s\n' "$list" | sed '/^$/d' | sed -n "${choice}p")"
@@ -293,12 +344,14 @@ main(){
   if [ -n "$DOMAIN" ]; then
     exact="$(printf '%s\n' "$all" | while IFS='|' read -r cert key source dom days domains; do
       [ -n "$cert" ] || continue
-      if [ "$dom" = "$DOMAIN" ] || printf '%s\n' "$domains" | tr ' ' '\n' | grep -Fxq "$DOMAIN"; then printf '%s|%s|%s|%s|%s|%s\n' "$cert" "$key" "$source" "$dom" "$days" "$domains"; fi
+      if [ "$dom" = "$DOMAIN" ] || printf '%s\n' "$domains" | tr ' ' '\n' | grep -Fxq "$DOMAIN"; then
+        printf '%s|%s|%s|%s|%s|%s\n' "$cert" "$key" "$source" "$dom" "$days" "$domains"
+      fi
     done | head -n1)"
     [ -n "$exact" ] && use_line "$exact"
   fi
   choose_line "$all" || true
-  warn "没有可自动使用或自动续期的本地证书/记录。"
+  warn "没有可直接使用的本地有效证书；缺失记录不会自动续期或重新签发。"
   exit 2
 }
 
