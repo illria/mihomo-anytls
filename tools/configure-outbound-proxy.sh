@@ -63,19 +63,6 @@ load_env(){
   CERT_FILE="$(read_env_value "$ENV_FILE" CERT_FILE || true)"
   KEY_FILE="$(read_env_value "$ENV_FILE" KEY_FILE || true)"
   INSTALL_MODE="$(read_env_value "$ENV_FILE" INSTALL_MODE || true)"
-  OUTBOUND_TYPE="$(read_env_value "$ENV_FILE" OUTBOUND_TYPE || true)"
-  OUTBOUND_HOST="$(read_env_value "$ENV_FILE" OUTBOUND_HOST || true)"
-  OUTBOUND_PORT="$(read_env_value "$ENV_FILE" OUTBOUND_PORT || true)"
-  OUTBOUND_USER="$(read_env_value "$ENV_FILE" OUTBOUND_USER || true)"
-  OUTBOUND_NAME="$(read_env_value "$ENV_FILE" OUTBOUND_NAME || true)"
-  OUTBOUND_UDP="$(read_env_value "$ENV_FILE" OUTBOUND_UDP || true)"
-
-  OUTBOUND_TYPE="${OUTBOUND_TYPE:-direct}"
-  OUTBOUND_NAME="${OUTBOUND_NAME:-upstream-out}"
-  if [ -z "$OUTBOUND_UDP" ]; then
-    if [ "$OUTBOUND_TYPE" = "socks5" ]; then OUTBOUND_UDP=true; else OUTBOUND_UDP=false; fi
-  fi
-
   [ -n "$CORE" ] || die "安装记录缺少 CORE。"
   [ -n "$PROTOCOL" ] || die "安装记录缺少 PROTOCOL。"
   [ -n "$CONFIG_FILE" ] || die "安装记录缺少 CONFIG_FILE。"
@@ -139,74 +126,10 @@ choose_outbound(){
 }
 
 backup_config(){
-  BACKUP_CONFIG=""
   [ -f "$CONFIG_FILE" ] || return 0
   local bak="$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
   cp -f "$CONFIG_FILE" "$bak"
-  BACKUP_CONFIG="$bak"
   info "已备份原配置：$bak"
-}
-
-restore_config(){
-  if [ -n "$BACKUP_CONFIG" ] && [ -f "$BACKUP_CONFIG" ]; then
-    cp -f "$BACKUP_CONFIG" "$CONFIG_FILE"
-    info "已恢复原配置：$CONFIG_FILE"
-  else
-    rm -f "$CONFIG_FILE"
-    info "已删除未通过验证的新配置：$CONFIG_FILE"
-  fi
-}
-
-validate_mihomo_config(){
-  local container image base bin
-  if [ "$INSTALL_MODE" = "docker" ]; then
-    has docker || { err "Docker 不可用，无法验证 mihomo 配置。"; return 1; }
-    container="mihomo-anytls"
-    image="local/mihomo-anytls:latest"
-    base="$(dirname "$CONFIG_FILE")"
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq "$container"; then
-      docker exec "$container" /usr/local/bin/mihomo -t -f "$CONFIG_FILE"
-    elif docker image inspect "$image" >/dev/null 2>&1; then
-      docker run --rm --network host -v "$base:$base" "$image" -t -f "$CONFIG_FILE"
-    else
-      err "找不到 mihomo Docker 容器或镜像，无法验证配置。"
-      return 1
-    fi
-  else
-    bin="$(command -v mihomo || true)"
-    [ -n "$bin" ] || { err "找不到 mihomo，无法验证配置。"; return 1; }
-    "$bin" -t -f "$CONFIG_FILE"
-  fi
-}
-
-validate_singbox_config(){
-  local container image base bin
-  if [ "$INSTALL_MODE" = "docker" ]; then
-    has docker || { err "Docker 不可用，无法验证 sing-box 配置。"; return 1; }
-    container="sing-box-${PROTOCOL:-anytls}"
-    image="local/sing-box-${PROTOCOL:-anytls}:latest"
-    base="$(dirname "$CONFIG_FILE")"
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq "$container"; then
-      docker exec "$container" /usr/local/bin/sing-box check -c "$CONFIG_FILE"
-    elif docker image inspect "$image" >/dev/null 2>&1; then
-      docker run --rm --network host -v "$base:$base" "$image" check -c "$CONFIG_FILE"
-    else
-      err "找不到 sing-box Docker 容器或镜像，无法验证配置。"
-      return 1
-    fi
-  else
-    bin="$(command -v sing-box || true)"
-    [ -n "$bin" ] || { err "找不到 sing-box，无法验证配置。"; return 1; }
-    "$bin" check -c "$CONFIG_FILE"
-  fi
-}
-
-validate_written_config(){
-  case "$CORE" in
-    mihomo) validate_mihomo_config ;;
-    sing-box) validate_singbox_config ;;
-    *) err "未知内核：$CORE"; return 1 ;;
-  esac
 }
 
 write_mihomo_config(){
@@ -370,18 +293,23 @@ show_summary(){
     else
       echo "SOCKS5 UDP: 已禁用"
     fi
+    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
     echo "UDP 回退 DIRECT: 禁止"
   elif [ "$OUTBOUND_TYPE" = "http" ]; then
     echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
     echo "UDP 支持: 不支持"
     echo "WebRTC/STUN: 不会通过该 HTTP 出口"
+    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
   else
     echo "UDP 支持: 不启用出口 UDP"
   fi
   echo "------------------------------------------------------------"
 }
 
-apply_config(){
+main(){
+  need_root
+  load_env
+  choose_outbound
   backup_config
   case "$CORE" in
     mihomo) write_mihomo_config ;;
@@ -389,22 +317,8 @@ apply_config(){
     *) die "未知内核：$CORE" ;;
   esac
   chmod 600 "$CONFIG_FILE"
-  if ! validate_written_config; then
-    err "新配置验证失败，不会重启服务。"
-    restore_config
-    return 1
-  fi
   write_outbound_env
   restart_service
-}
-
-main(){
-  need_root
-  load_env
-  choose_outbound
-  if ! apply_config; then
-    exit 1
-  fi
   show_summary
 }
 
