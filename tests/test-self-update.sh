@@ -161,7 +161,7 @@ write_cron
 assert_file_contains 'SHELL=/bin/bash' "$CRON_FILE"
 assert_file_contains 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' "$CRON_FILE"
 assert_file_contains '17 4 * * *' "$CRON_FILE"
-assert_file_contains '"'"$BIN_MAIN" --self-update-run' "$CRON_FILE"
+assert_file_contains "\"$BIN_MAIN\" --self-update-run" "$CRON_FILE"
 assert_not_contains 'mktemp' "$CRON_FILE"
 assert_not_contains 'curl' "$CRON_FILE"
 [ "$(cron_file_mode "$CRON_FILE")" = 644 ] || fail "cron mode is not 0644"
