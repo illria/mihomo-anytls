@@ -365,11 +365,11 @@ validate_custom_cert_pair(){
     warn "私钥无法解析：$key"
     return 1
   fi
-  if ! cert_pub="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $2}')"; then
+  if ! cert_pub="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')"; then
     warn "无法读取证书公钥：$cert"
     return 1
   fi
-  if ! key_pub="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $2}')"; then
+  if ! key_pub="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $NF}')"; then
     warn "无法读取私钥公钥：$key"
     return 1
   fi
