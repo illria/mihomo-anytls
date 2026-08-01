@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-08-01-eianun-en-mi-v4"
+INSTALLER_VERSION="2026-08-02-eianun-en-mi-v5"
 AUTHOR="Eianun"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
