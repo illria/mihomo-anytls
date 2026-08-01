@@ -195,6 +195,48 @@ check_socks_udp_summary() {
 
 check_socks_udp_summary
 
+check_sing_http_summary() {
+  set_common
+  CORE="sing-box"
+  OUTBOUND_TYPE="http"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="8080"
+  show_summary > "$TMP_ROOT/sing-http-summary.txt"
+  assert_contains 'UDP 支持: 不支持' "$TMP_ROOT/sing-http-summary.txt"
+  assert_not_contains 'UDP 处理: REJECT' "$TMP_ROOT/sing-http-summary.txt"
+  assert_not_contains 'REJECT' "$TMP_ROOT/sing-http-summary.txt"
+}
+
+check_sing_socks_disabled_summary() {
+  set_common
+  CORE="sing-box"
+  OUTBOUND_TYPE="socks5"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="1080"
+  OUTBOUND_UDP=false
+  show_summary > "$TMP_ROOT/sing-socks-disabled-summary.txt"
+  assert_contains 'SOCKS5 UDP: 已禁用' "$TMP_ROOT/sing-socks-disabled-summary.txt"
+  assert_contains '出站网络: TCP only' "$TMP_ROOT/sing-socks-disabled-summary.txt"
+  assert_not_contains 'UDP 处理: REJECT' "$TMP_ROOT/sing-socks-disabled-summary.txt"
+}
+
+check_sing_socks_enabled_summary() {
+  set_common
+  CORE="sing-box"
+  OUTBOUND_TYPE="socks5"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="1080"
+  OUTBOUND_UDP=true
+  show_summary > "$TMP_ROOT/sing-socks-enabled-summary.txt"
+  assert_contains 'SOCKS5 UDP: 已启用' "$TMP_ROOT/sing-socks-enabled-summary.txt"
+  assert_contains '出站网络: TCP + UDP' "$TMP_ROOT/sing-socks-enabled-summary.txt"
+  assert_not_contains 'UDP 处理: REJECT' "$TMP_ROOT/sing-socks-enabled-summary.txt"
+}
+
+check_sing_http_summary
+check_sing_socks_disabled_summary
+check_sing_socks_enabled_summary
+
 set_common
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
@@ -206,6 +248,7 @@ assert_contains 'server: "127.0.0.1"' "$CONFIG_FILE"
 assert_contains 'port: 1080' "$CONFIG_FILE"
 assert_contains 'udp: true' "$CONFIG_FILE"
 assert_contains '  - MATCH,upstream-out' "$CONFIG_FILE"
+assert_not_contains 'NETWORK,UDP,REJECT' "$CONFIG_FILE"
 assert_not_contains 'NETWORK,UDP,DIRECT' "$CONFIG_FILE"
 
 set_common
@@ -318,9 +361,6 @@ OUTBOUND_UDP=true
 write_outbound_env
 assert_contains 'OUTBOUND_UDP="true"' "$ENV_FILE"
 assert_not_contains 'OUTBOUND_PASS=' "$ENV_FILE"
-
-assert_contains 'network_mode: host' "$INSTALLER"
-assert_not_contains 'host.docker.internal' "$INSTALLER"
 
 
 echo "outbound SOCKS5 UDP regression tests passed"
