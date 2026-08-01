@@ -58,7 +58,76 @@ write_mihomo_case() {
 
 choose_outbound_http_no_auth() {
   set_common
-  choose_outbound <<< 
+  choose_outbound <<'INPUT'
+2
+proxy.example
+8080
+n
+INPUT
+  [ "$OUTBOUND_TYPE" = "http" ]
+  [ "$OUTBOUND_UDP" = false ]
+  [ -z "$OUTBOUND_USER" ]
+  [ -z "$OUTBOUND_PASS" ]
+}
+
+choose_outbound_http_auth() {
+  set_common
+  choose_outbound <<'INPUT'
+2
+proxy.example
+8080
+y
+http-user
+http-pass
+INPUT
+  CONFIG_FILE="$TMP_ROOT/http-auth.yaml"
+  write_mihomo_config
+  assert_contains 'type: http' "$CONFIG_FILE"
+  assert_contains 'username: "http-user"' "$CONFIG_FILE"
+  assert_contains 'password: "http-pass"' "$CONFIG_FILE"
+}
+
+choose_outbound_socks_auth() {
+  set_common
+  choose_outbound <<'INPUT'
+3
+proxy.example
+1080
+y
+y
+socks-user
+socks-pass
+INPUT
+  CONFIG_FILE="$TMP_ROOT/socks-auth.yaml"
+  write_mihomo_config
+  assert_contains 'type: socks5' "$CONFIG_FILE"
+  assert_contains 'username: "socks-user"' "$CONFIG_FILE"
+  assert_contains 'password: "socks-pass"' "$CONFIG_FILE"
+}
+
+choose_outbound_gatevpn_no_auth() {
+  set_common
+  choose_outbound <<'INPUT'
+4
+INPUT
+  [ "$OUTBOUND_TYPE" = "socks5" ]
+  [ "$OUTBOUND_HOST" = "127.0.0.1" ]
+  [ "$OUTBOUND_PORT" = "7928" ]
+  [ "$OUTBOUND_UDP" = true ]
+  [ "$OUTBOUND_GATEVPN" = true ]
+  [ -z "$OUTBOUND_USER" ]
+  [ -z "$OUTBOUND_PASS" ]
+  CONFIG_FILE="$TMP_ROOT/gatevpn-no-auth.yaml"
+  write_mihomo_config
+  assert_not_contains 'username:' "$CONFIG_FILE"
+  assert_not_contains 'password:' "$CONFIG_FILE"
+}
+
+choose_outbound_http_no_auth
+choose_outbound_http_auth
+choose_outbound_socks_auth
+choose_outbound_gatevpn_no_auth
+
 set_common
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
