@@ -14,6 +14,8 @@ CERT_FILE=""
 KEY_FILE=""
 INSTALL_MODE=""
 OUTBOUND_TYPE="direct"
+OUTBOUND_UDP="false"
+OUTBOUND_GATEVPN="false"
 OUTBOUND_HOST=""
 OUTBOUND_PORT=""
 OUTBOUND_USER=""
@@ -62,6 +64,18 @@ load_env(){
   CERT_FILE="$(read_env_value "$ENV_FILE" CERT_FILE || true)"
   KEY_FILE="$(read_env_value "$ENV_FILE" KEY_FILE || true)"
   INSTALL_MODE="$(read_env_value "$ENV_FILE" INSTALL_MODE || true)"
+  OUTBOUND_TYPE="$(read_env_value "$ENV_FILE" OUTBOUND_TYPE || true)"
+  OUTBOUND_HOST="$(read_env_value "$ENV_FILE" OUTBOUND_HOST || true)"
+  OUTBOUND_PORT="$(read_env_value "$ENV_FILE" OUTBOUND_PORT || true)"
+  OUTBOUND_USER="$(read_env_value "$ENV_FILE" OUTBOUND_USER || true)"
+  OUTBOUND_NAME="$(read_env_value "$ENV_FILE" OUTBOUND_NAME || true)"
+  OUTBOUND_UDP="$(read_env_value "$ENV_FILE" OUTBOUND_UDP || true)"
+
+  OUTBOUND_TYPE="${OUTBOUND_TYPE:-direct}"
+  OUTBOUND_NAME="${OUTBOUND_NAME:-upstream-out}"
+  if [ -z "$OUTBOUND_UDP" ]; then
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then OUTBOUND_UDP=true; else OUTBOUND_UDP=false; fi
+  fi
 
   [ -n "$CORE" ] || die "安装记录缺少 CORE。"
   [ -n "$PROTOCOL" ] || die "安装记录缺少 PROTOCOL。"
@@ -69,22 +83,30 @@ load_env(){
 }
 
 choose_outbound(){
-  local x auth
+  local x auth udp_answer
+  OUTBOUND_GATEVPN=false
+  OUTBOUND_USER=""
+  OUTBOUND_PASS=""
   echo "当前节点: $CORE / $PROTOCOL / $DOMAIN:$PORT"
   echo
   echo "请选择出口方式："
   echo "  1) DIRECT 直连"
-  echo "  2) HTTP 出口代理"
+  echo "  2) HTTP/TCP 出口代理（不支持 UDP/WebRTC）"
   echo "  3) SOCKS5 出口代理"
+  echo "  4) GateVPN 本地 SOCKS5 UDP 出口（127.0.0.1:7928）"
   read -r -p "输入序号 [1]: " x
   x="${x:-1}"
 
   case "$x" in
     1|direct|DIRECT)
       OUTBOUND_TYPE="direct"
+      OUTBOUND_HOST=""
+      OUTBOUND_PORT=""
+      OUTBOUND_UDP=false
       ;;
     2|http|HTTP)
       OUTBOUND_TYPE="http"
+      OUTBOUND_UDP=false
       read -r -p "HTTP 代理地址: " OUTBOUND_HOST
       read -r -p "HTTP 代理端口: " OUTBOUND_PORT
       ;;
@@ -92,6 +114,20 @@ choose_outbound(){
       OUTBOUND_TYPE="socks5"
       read -r -p "SOCKS5 代理地址: " OUTBOUND_HOST
       read -r -p "SOCKS5 代理端口: " OUTBOUND_PORT
+      read -r -p "是否启用 SOCKS5 UDP ASSOCIATE？[Y/n]: " udp_answer
+      udp_answer="${udp_answer:-y}"
+      case "$udp_answer" in
+        y|Y|yes|YES) OUTBOUND_UDP=true ;;
+        *) OUTBOUND_UDP=false ;;
+      esac
+      ;;
+    4|gatevpn|GateVPN)
+      OUTBOUND_TYPE="socks5"
+      OUTBOUND_HOST="127.0.0.1"
+      OUTBOUND_PORT="7928"
+      OUTBOUND_UDP=true
+      OUTBOUND_GATEVPN=true
+      info "已选择 GateVPN 本地 SOCKS5 UDP 出口：127.0.0.1:7928"
       ;;
     *) die "无效出口方式：$x" ;;
   esac
@@ -99,26 +135,160 @@ choose_outbound(){
   if [ "$OUTBOUND_TYPE" != "direct" ]; then
     [ -n "$OUTBOUND_HOST" ] || die "代理地址不能为空。"
     [[ "$OUTBOUND_PORT" =~ ^[0-9]+$ ]] || die "代理端口必须是数字。"
-    read -r -p "是否需要用户名密码认证？[y/N]: " auth
-    auth="${auth:-n}"
-    case "$auth" in
-      y|Y|yes|YES)
-        read -r -p "代理用户名: " OUTBOUND_USER
-        read -r -p "代理密码: " OUTBOUND_PASS
-        ;;
-    esac
+    if [ "$OUTBOUND_TYPE" = "socks5" ] && [ "$OUTBOUND_GATEVPN" != true ]; then
+      read -r -p "是否需要用户名密码认证？[y/N]: " auth
+      auth="${auth:-n}"
+      case "$auth" in
+        y|Y|yes|YES)
+          read -r -p "代理用户名: " OUTBOUND_USER
+          read -r -p "代理密码: " OUTBOUND_PASS
+          ;;
+      esac
+    fi
   fi
 }
 
+check_socks5_udp_associate(){
+  local host="${1:-}" port="${2:-}"
+  [ -n "$host" ] || return 1
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  has python3 || return 1
+  python3 - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+
+def recv_exact(sock, size):
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise RuntimeError("truncated SOCKS5 response")
+        data += chunk
+    return data
+
+try:
+    with socket.create_connection((host, port), timeout=3) as sock:
+        sock.settimeout(3)
+        sock.sendall(b"\x05\x01\x00")
+        if recv_exact(sock, 2) != b"\x05\x00":
+            raise RuntimeError("SOCKS5 no-auth negotiation failed")
+
+        sock.sendall(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")
+        header = recv_exact(sock, 4)
+        if header[0] != 5 or header[1] != 0:
+            raise RuntimeError("UDP ASSOCIATE returned a failure")
+        atyp = header[3]
+        if atyp == 1:
+            recv_exact(sock, 4)
+        elif atyp == 3:
+            length = recv_exact(sock, 1)[0]
+            recv_exact(sock, length)
+        elif atyp == 4:
+            recv_exact(sock, 16)
+        else:
+            raise RuntimeError("unsupported SOCKS5 BND.ADDR type")
+        recv_exact(sock, 2)
+except Exception as exc:
+    print("GateVPN SOCKS5 UDP ASSOCIATE check failed: %s" % exc, file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+precheck_gatevpn(){
+  [ "$OUTBOUND_GATEVPN" = true ] || return 0
+  if check_socks5_udp_associate "$OUTBOUND_HOST" "$OUTBOUND_PORT"; then
+    info "GateVPN SOCKS5 UDP ASSOCIATE 预检查通过。"
+    return 0
+  fi
+  err "GateVPN SOCKS5 UDP ASSOCIATE 不可用。"
+  err "请确认 gatevpn PR #2 已合并、服务已更新，并且 127.0.0.1:7928 正常监听。"
+  local answer
+  read -r -p "是否仍保存配置？[y/N]: " answer
+  case "$answer" in
+    y|Y|yes|YES)
+      warn "将保留 GateVPN SOCKS5 UDP 配置，不会自动切换到 HTTP 或 DIRECT。"
+      return 0
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 backup_config(){
+  BACKUP_CONFIG=""
   [ -f "$CONFIG_FILE" ] || return 0
   local bak="$CONFIG_FILE.bak.$(date +%Y%m%d-%H%M%S)"
   cp -f "$CONFIG_FILE" "$bak"
+  BACKUP_CONFIG="$bak"
   info "已备份原配置：$bak"
 }
 
+restore_config(){
+  if [ -n "$BACKUP_CONFIG" ] && [ -f "$BACKUP_CONFIG" ]; then
+    cp -f "$BACKUP_CONFIG" "$CONFIG_FILE"
+    info "已恢复原配置：$CONFIG_FILE"
+  else
+    rm -f "$CONFIG_FILE"
+    info "已删除未通过验证的新配置：$CONFIG_FILE"
+  fi
+}
+
+validate_mihomo_config(){
+  local container image base bin
+  if [ "$INSTALL_MODE" = "docker" ]; then
+    has docker || { err "Docker 不可用，无法验证 mihomo 配置。"; return 1; }
+    container="mihomo-anytls"
+    image="local/mihomo-anytls:latest"
+    base="$(dirname "$CONFIG_FILE")"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq "$container"; then
+      docker exec "$container" /usr/local/bin/mihomo -t -f "$CONFIG_FILE"
+    elif docker image inspect "$image" >/dev/null 2>&1; then
+      docker run --rm --network host -v "$base:$base" "$image" -t -f "$CONFIG_FILE"
+    else
+      err "找不到 mihomo Docker 容器或镜像，无法验证配置。"
+      return 1
+    fi
+  else
+    bin="$(command -v mihomo || true)"
+    [ -n "$bin" ] || { err "找不到 mihomo，无法验证配置。"; return 1; }
+    "$bin" -t -f "$CONFIG_FILE"
+  fi
+}
+
+validate_singbox_config(){
+  local container image base bin
+  if [ "$INSTALL_MODE" = "docker" ]; then
+    has docker || { err "Docker 不可用，无法验证 sing-box 配置。"; return 1; }
+    container="sing-box-${PROTOCOL:-anytls}"
+    image="local/sing-box-${PROTOCOL:-anytls}:latest"
+    base="$(dirname "$CONFIG_FILE")"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq "$container"; then
+      docker exec "$container" /usr/local/bin/sing-box check -c "$CONFIG_FILE"
+    elif docker image inspect "$image" >/dev/null 2>&1; then
+      docker run --rm --network host -v "$base:$base" "$image" check -c "$CONFIG_FILE"
+    else
+      err "找不到 sing-box Docker 容器或镜像，无法验证配置。"
+      return 1
+    fi
+  else
+    bin="$(command -v sing-box || true)"
+    [ -n "$bin" ] || { err "找不到 sing-box，无法验证配置。"; return 1; }
+    "$bin" check -c "$CONFIG_FILE"
+  fi
+}
+
+validate_written_config(){
+  case "$CORE" in
+    mihomo) validate_mihomo_config ;;
+    sing-box) validate_singbox_config ;;
+    *) err "未知内核：$CORE"; return 1 ;;
+  esac
+}
+
 write_mihomo_config(){
-  local sec proxy_type yh yp host port user pass
+  local sec proxy_type host port user pass
   sec="$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | cut -c1-32)"
   host="$(yaml_escape "$OUTBOUND_HOST")"
   port="$OUTBOUND_PORT"
@@ -158,6 +328,11 @@ proxies:
     server: "$host"
     port: $port
 EOF
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      cat >> "$CONFIG_FILE" <<EOF
+    udp: ${OUTBOUND_UDP:-false}
+EOF
+    fi
     if [ -n "$OUTBOUND_USER" ]; then
       cat >> "$CONFIG_FILE" <<EOF
     username: "$user"
@@ -187,7 +362,10 @@ singbox_outbound_json(){
       printf '}'
       ;;
     socks5)
-      printf '{"type":"socks","tag":"%s","server":"%s","server_port":%s' "$OUTBOUND_NAME" "$h" "$OUTBOUND_PORT"
+      printf '{"type":"socks","tag":"%s","server":"%s","server_port":%s,"version":"5"' "$OUTBOUND_NAME" "$h" "$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" != true ]; then
+        printf ',"network":"tcp"'
+      fi
       [ -n "$OUTBOUND_USER" ] && printf ',"username":"%s","password":"%s"' "$u" "$p"
       printf '}'
       ;;
@@ -230,13 +408,14 @@ EOF
 write_outbound_env(){
   local tmp
   tmp="$(mktemp)"
-  grep -Ev '^(OUTBOUND_TYPE|OUTBOUND_HOST|OUTBOUND_PORT|OUTBOUND_USER|OUTBOUND_NAME)=' "$ENV_FILE" > "$tmp" || true
+  grep -Ev '^(OUTBOUND_TYPE|OUTBOUND_HOST|OUTBOUND_PORT|OUTBOUND_USER|OUTBOUND_NAME|OUTBOUND_UDP)=' "$ENV_FILE" > "$tmp" || true
   cat >> "$tmp" <<EOF
 OUTBOUND_TYPE="$OUTBOUND_TYPE"
 OUTBOUND_HOST="$OUTBOUND_HOST"
 OUTBOUND_PORT="$OUTBOUND_PORT"
 OUTBOUND_USER="$OUTBOUND_USER"
 OUTBOUND_NAME="$OUTBOUND_NAME"
+OUTBOUND_UDP="${OUTBOUND_UDP:-false}"
 EOF
   cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
@@ -262,9 +441,25 @@ show_summary(){
   echo "协议: $PROTOCOL"
   echo "配置文件: $CONFIG_FILE"
   echo "出口方式: $OUTBOUND_TYPE"
-  if [ "$OUTBOUND_TYPE" != "direct" ]; then
+  if [ "$OUTBOUND_TYPE" = "socks5" ]; then
     echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
-    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    if [ "${OUTBOUND_UDP:-false}" = true ]; then
+      echo "SOCKS5 UDP: 已启用"
+    else
+      echo "SOCKS5 UDP: 已禁用"
+    fi
+    if [ "$OUTBOUND_GATEVPN" = true ]; then
+      echo "GateVPN 模式: 是"
+    else
+      echo "GateVPN 模式: 否"
+    fi
+    echo "UDP 回退 DIRECT: 禁止"
+  elif [ "$OUTBOUND_TYPE" = "http" ]; then
+    echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+    echo "UDP 支持: 不支持"
+    echo "WebRTC/STUN: 不会通过该 HTTP 出口"
+  else
+    echo "UDP 支持: 不启用出口 UDP"
   fi
   echo "------------------------------------------------------------"
 }
@@ -273,6 +468,10 @@ main(){
   need_root
   load_env
   choose_outbound
+  if ! precheck_gatevpn; then
+    err "已取消保存 GateVPN 配置。"
+    exit 1
+  fi
   backup_config
   case "$CORE" in
     mihomo) write_mihomo_config ;;
@@ -280,6 +479,11 @@ main(){
     *) die "未知内核：$CORE" ;;
   esac
   chmod 600 "$CONFIG_FILE"
+  if ! validate_written_config; then
+    err "新配置验证失败，不会重启服务。"
+    restore_config
+    exit 1
+  fi
   write_outbound_env
   restart_service
   show_summary
