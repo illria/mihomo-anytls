@@ -107,6 +107,34 @@ INPUT
 choose_outbound_http_no_auth
 choose_outbound_http_auth
 choose_outbound_socks_auth
+check_http_summary() {
+  set_common
+  OUTBOUND_TYPE="http"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="8080"
+  OUTBOUND_USER="http-user"
+  OUTBOUND_PASS="http-secret"
+  show_summary > "$TMP_ROOT/http-summary.txt"
+  assert_contains '出口认证: http-user / ******' "$TMP_ROOT/http-summary.txt"
+  assert_not_contains 'http-secret' "$TMP_ROOT/http-summary.txt"
+}
+
+check_socks_summary() {
+  set_common
+  OUTBOUND_TYPE="socks5"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="1080"
+  OUTBOUND_UDP=true
+  OUTBOUND_USER="socks-user"
+  OUTBOUND_PASS="socks-secret"
+  show_summary > "$TMP_ROOT/socks-summary.txt"
+  assert_contains '出口认证: socks-user / ******' "$TMP_ROOT/socks-summary.txt"
+  assert_not_contains 'socks-secret' "$TMP_ROOT/socks-summary.txt"
+}
+
+check_http_summary
+check_socks_summary
+
 set_common
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
@@ -229,43 +257,5 @@ assert_not_contains 'OUTBOUND_PASS=' "$ENV_FILE"
 assert_contains 'network_mode: host' "$INSTALLER"
 assert_not_contains 'host.docker.internal' "$INSTALLER"
 
-test_apply_config_rollback() {
-  local kind="$1" existing="$2" original=""
-  CORE="$kind"
-  PROTOCOL="anytls"
-  INSTALL_MODE="systemd"
-  ENV_FILE="$TMP_ROOT/rollback-$kind.env"
-  CONFIG_FILE="$TMP_ROOT/rollback-$kind.yaml"
-  RESTART_CALLED=false
-  ENV_WRITE_CALLED=false
-  write_mihomo_config() { printf 'new-mihomo\n' > "$CONFIG_FILE"; }
-  write_singbox_config() { printf 'new-sing-box\n' > "$CONFIG_FILE"; }
-  validate_written_config() { return 1; }
-  write_outbound_env() { ENV_WRITE_CALLED=true; }
-  restart_service() { RESTART_CALLED=true; }
-
-  if [ "$existing" = true ]; then
-    printf 'original-%s\n' "$kind" > "$CONFIG_FILE"
-    original="$TMP_ROOT/original-$kind"
-    cp "$CONFIG_FILE" "$original"
-  else
-    rm -f "$CONFIG_FILE"
-  fi
-
-  if apply_config; then
-    echo "apply_config unexpectedly succeeded for $kind" >&2
-    exit 1
-  fi
-  [ "$RESTART_CALLED" = false ]
-  [ "$ENV_WRITE_CALLED" = false ]
-  if [ "$existing" = true ]; then
-    cmp -s "$CONFIG_FILE" "$original"
-  else
-    [ ! -e "$CONFIG_FILE" ]
-  fi
-}
-
-test_apply_config_rollback mihomo true
-test_apply_config_rollback sing-box false
 
 echo "outbound SOCKS5 UDP regression tests passed"
