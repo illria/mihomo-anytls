@@ -294,6 +294,75 @@ bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/to
 
 ---
 
+## GateVPN 本地 SOCKS5 UDP 出口
+
+本项目支持使用 [illria/gatevpn](https://github.com/illria/gatevpn) 的本地 SOCKS5 UDP ASSOCIATE 出口。
+
+GateVPN 的两种本地接口用途不同：
+
+~~~text
+HTTP/TCP（仅 TCP）：
+http://127.0.0.1:7928
+
+SOCKS5（TCP + UDP ASSOCIATE）：
+socks5://127.0.0.1:7928
+~~~
+
+HTTP 代理不支持 UDP，不能用于 WebRTC/STUN。选择 GateVPN 模式时，出口脚本会使用 SOCKS5，并在 mihomo 配置中生成：
+
+~~~yaml
+proxies:
+  - name: gatevpn
+    type: socks5
+    server: 127.0.0.1
+    port: 7928
+    udp: true
+~~~
+
+Docker 模式使用 network_mode: host，所以 127.0.0.1:7928 指向宿主机网络命名空间，不需要 host.docker.internal 或额外端口映射。
+
+sing-box 使用官方 SOCKS outbound 格式（type: socks、version: "5"），不写 mihomo 专用的 udp 字段；需要关闭 UDP 时使用合法的 network: "tcp" 配置。详见 [sing-box SOCKS outbound 文档](https://sing-box.sagernet.org/configuration/outbound/socks/)。
+
+### 真实 VPS 验收
+
+以下步骤需要在已安装 GateVPN 的 Linux VPS 上执行：
+
+1. 确认 GateVPN 已连接：
+
+   ~~~bash
+   ip addr show tun0
+   ~~~
+
+2. 检查 TCP 出口：
+
+   ~~~bash
+   curl -x socks5h://127.0.0.1:7928 https://api.ipify.org
+   ~~~
+
+3. 运行 GateVPN SOCKS5 UDP 检测工具：
+
+   ~~~bash
+   python3 tools/check_socks5_udp.py
+   ~~~
+
+   如果该工具不在本仓库，请使用 gatevpn 仓库提供的等价检测脚本。
+
+4. 检查 mihomo 配置：
+
+   ~~~bash
+   grep -A8 'type: socks5' /etc/mihomo/config.yaml
+   ~~~
+
+   结果应包含：
+
+   ~~~text
+   udp: true
+   ~~~
+
+5. 在浏览器中测试 WebRTC，比较 HTTP 出口 IP 与 WebRTC IP 是否属于同一个 GateVPN/OpenVPN 国家。
+
+本地 mock SOCKS5 测试不会访问真实 GateVPN、tun0 或公网 STUN。只有在真实 VPS 上同时验证 tun0、SOCKS5 UDP ASSOCIATE、mihomo udp: true 和公网 STUN IP 后，才能判断具体部署是否完成；本项目不会仅凭本地测试声称 WebRTC 泄漏已经完全解决。
+
 ## 免责声明
 
 本项目仅用于学习和自用服务器管理。请遵守当地法律法规和服务商规则。
