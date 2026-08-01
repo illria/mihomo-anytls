@@ -298,7 +298,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/illria/mihomo-anytls/main/to
 
 配置出口时选择“SOCKS5 出口代理”，输入任意代理地址和端口，然后选择是否启用 UDP ASSOCIATE。
 
-HTTP 出口是 TCP-only。HTTP 的 UDP 流量会由 mihomo 显式 REJECT，不会因为 HTTP 节点不支持 UDP 而跳过后回到默认 DIRECT。
+HTTP 出口是 TCP-only。在 mihomo 中，HTTP 的 UDP 流量会显式 REJECT，不会因为 HTTP 节点不支持 UDP 而跳过后回到默认 DIRECT；sing-box 不生成 mihomo 专用的 REJECT 路由。
 
 SOCKS5 启用 UDP 时生成 `udp: true`，TCP 和 UDP 都通过该 SOCKS5 出口。项目不会检测上游服务器是否真正实现 UDP ASSOCIATE，用户必须确认自己的 SOCKS5 服务支持 UDP。
 
