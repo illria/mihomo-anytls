@@ -36,6 +36,12 @@ assert_no_update_temps(){
 
 bash -n "$TOOL"
 bash -n "$INSTALLER"
+assert_not_contains 'install_shortcuts' "$INSTALLER"
+assert_not_contains 'install -m 755 "$tmp" "$BIN_MAIN"' "$INSTALLER"
+assert_not_contains 'install -m 755 "$tmp" "$BIN_SHORT"' "$INSTALLER"
+lock_line="$(grep -n 'flock -n 9' "$TOOL" | head -n1 | cut -d: -f1)"
+replace_line="$(grep -n 'replace_main_target' "$TOOL" | tail -n1 | cut -d: -f1)"
+[ "$lock_line" -lt "$replace_line" ] || fail "flock is not before the first target replacement"
 STRIPPED="$TEST_ROOT/self-update-no-main.sh"
 sed '/^main "\$@"$/d' "$TOOL" > "$STRIPPED"
 # shellcheck disable=SC1090
@@ -76,6 +82,20 @@ assert_contains '-n 9' "$LOCK_CALLS"
 assert_no_update_temps
 assert_contains '--self-update-run' "$INSTALLER"
 assert_contains 'run_remote_script "$SELF_UPDATE_URL" run-update' "$INSTALLER"
+
+# The full install.sh entry dispatches once and never initializes shortcut installation.
+ENTRY_STRIPPED="$TEST_ROOT/install-no-main.sh"
+sed '/^main "$@"$/d' "$INSTALLER" > "$ENTRY_STRIPPED"
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  need_root(){ :; }
+  install_shortcuts(){ fail "legacy shortcut installer was called"; }
+  ENTRY_CALLS=0
+  run_self_update_once(){ ENTRY_CALLS=$((ENTRY_CALLS + 1)); }
+  main --self-update-run
+  [ "$ENTRY_CALLS" -eq 1 ] || fail "self-update entry was not called exactly once"
+)
 
 # A lock miss returns nonzero, prints a clear state, and writes the same log.
 flock(){
@@ -258,6 +278,15 @@ cmp -s "$OLD_CRON" "$CRON_FILE" || fail "signal cron update did not restore old 
 assert_no_update_temps
 unset -f after_cron_replaced_hook
 after_cron_replaced_hook(){ :; }
+
+# An Alpine marker makes status reject even a legacy cron.d file and running daemon.
+detect_pkg(){ PKG_MANAGER=apk; }
+cron_daemon_running(){ return 0; }
+write_cron
+status > "$TEST_ROOT/status-alpine"
+assert_file_contains '状态: 当前版本不支持 Alpine 自动更新后端' "$TEST_ROOT/status-alpine"
+assert_file_not_contains '状态: 自动更新正常' "$TEST_ROOT/status-alpine"
+detect_pkg(){ PKG_MANAGER=unknown; }
 
 # Status marks bad permissions and missing entrypoint as invalid.
 write_cron
