@@ -150,6 +150,21 @@ if run_update >"$TEST_ROOT/absent-stage-failure.out" 2>&1; then fail "absent-fil
 unset -f install
 assert_no_update_temps
 
+# A signal after the first final rename rolls both commands back before cleanup.
+printf '%s\n' 'old-main' > "$BIN_MAIN"
+printf '%s\n' 'old-short' > "$BIN_SHORT"
+BACKUP_SEEN="$TEST_ROOT/update-backup-seen"
+after_main_replaced_hook(){
+  find "$BIN_DIR" -type f -name '.*.backup.*' -print -quit > "$BACKUP_SEEN"
+  kill -INT "$BASHPID"
+}
+if run_update >"$TEST_ROOT/signal-update.out" 2>&1; then fail "signal update returned success"; fi
+assert_file_contains 'old-main' "$BIN_MAIN"
+assert_file_contains 'old-short' "$BIN_SHORT"
+[ -s "$BACKUP_SEEN" ] || fail "signal hook did not see rollback backups"
+assert_no_update_temps
+unset -f after_main_replaced_hook
+
 # Success installs two identical executable commands.
 run_update
 [ -x "$BIN_MAIN" ] && [ -x "$BIN_SHORT" ] || fail "success did not install both commands"
@@ -215,6 +230,31 @@ cmp -s "$OLD_CRON" "$CRON_FILE" || fail "post-write failure did not restore old 
 eval "$ORIGINAL_CRON_FILE_VALID"
 assert_no_update_temps
 
+# A stopped Alpine backend is explicitly rejected without installing or writing cron.
+install_command(){ :; }
+detect_pkg(){ PKG_MANAGER=apk; }
+cron_daemon_running(){ return 1; }
+rm -f -- "$CRON_FILE"
+if alpine_output="$(install_cron 2>&1)"; then fail "Alpine backend was incorrectly accepted"; fi
+assert_contains '尚未实现 Alpine cron 后端' <(printf '%s\n' "$alpine_output")
+[ ! -e "$CRON_FILE" ] || fail "Alpine rejection left a cron file"
+
+# A signal after cron replacement restores the previous cron file before cleanup.
+detect_pkg(){ PKG_MANAGER=unknown; }
+cron_daemon_running(){ return 0; }
+write_cron
+cp -p "$CRON_FILE" "$OLD_CRON"
+CRON_BACKUP_SEEN="$TEST_ROOT/cron-backup-seen"
+after_cron_replaced_hook(){
+  find "$(dirname "$CRON_FILE")" -type f -name '.*.backup.*' -print -quit > "$CRON_BACKUP_SEEN"
+  kill -INT "$BASHPID"
+}
+if install_cron >"$TEST_ROOT/signal-cron.out" 2>&1; then fail "signal cron update returned success"; fi
+cmp -s "$OLD_CRON" "$CRON_FILE" || fail "signal cron update did not restore old cron"
+[ -s "$CRON_BACKUP_SEEN" ] || fail "cron signal hook did not see rollback backup"
+assert_no_update_temps
+unset -f after_cron_replaced_hook
+
 # Status marks bad permissions and missing entrypoint as invalid.
 write_cron
 chmod 600 "$CRON_FILE"
@@ -228,14 +268,38 @@ rm -f -- "$CRON_FILE.bak"
 status > "$TEST_ROOT/status-bad-entrypoint"
 assert_file_contains '状态: cron 配置无效' "$TEST_ROOT/status-bad-entrypoint"
 
-# Status distinguishes not installed, commands only, stopped daemon, and healthy update.
+# Status distinguishes missing commands, partial installs, mismatched commands, and healthy update.
 rm -f -- "$BIN_MAIN" "$BIN_SHORT" "$CRON_FILE"
 STATUS_DAEMON=false
 status > "$TEST_ROOT/status-none"
 assert_file_contains '状态: 未安装' "$TEST_ROOT/status-none"
 
-install -m 755 /bin/sh "$BIN_MAIN"
-install -m 755 /bin/sh "$BIN_SHORT"
+printf '%s\n' 'main-only' > "$BIN_MAIN"
+chmod 755 "$BIN_MAIN"
+status > "$TEST_ROOT/status-main-only"
+assert_file_contains '状态: 命令安装不完整' "$TEST_ROOT/status-main-only"
+
+rm -f -- "$BIN_MAIN"
+printf '%s\n' 'short-only' > "$BIN_SHORT"
+chmod 755 "$BIN_SHORT"
+status > "$TEST_ROOT/status-short-only"
+assert_file_contains '状态: 命令安装不完整' "$TEST_ROOT/status-short-only"
+
+printf '%s\n' 'main-version' > "$BIN_MAIN"
+chmod 755 "$BIN_MAIN"
+status > "$TEST_ROOT/status-mismatch"
+assert_file_contains '状态: 两个管理命令版本不一致' "$TEST_ROOT/status-mismatch"
+
+write_cron
+rm -f -- "$BIN_MAIN"
+STATUS_DAEMON=true
+status > "$TEST_ROOT/status-cron-main-missing"
+assert_file_contains '状态: 命令安装不完整' "$TEST_ROOT/status-cron-main-missing"
+
+printf '%s\n' 'same-version' > "$BIN_MAIN"
+chmod 755 "$BIN_MAIN"
+printf '%s\n' 'same-version' > "$BIN_SHORT"
+chmod 755 "$BIN_SHORT"
 rm -f -- "$CRON_FILE"
 status > "$TEST_ROOT/status-commands"
 assert_file_contains '状态: 命令已安装但 cron 未启用' "$TEST_ROOT/status-commands"
