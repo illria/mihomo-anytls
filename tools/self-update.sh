@@ -418,6 +418,8 @@ menu(){
   esac
 }
 
+run_update(){ install_command; }
+
 main(){
   need_root
   case "${1:-}" in
