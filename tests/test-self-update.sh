@@ -81,7 +81,9 @@ cmp -s "$BIN_MAIN" "$BIN_SHORT" || fail "successful command contents differ"
 assert_contains '-n 9' "$LOCK_CALLS"
 assert_no_update_temps
 assert_contains '--self-update-run' "$INSTALLER"
-assert_contains 'run_remote_script "$SELF_UPDATE_URL" run-update' "$INSTALLER"
+assert_contains 'run_remote_script_noninteractive "$SELF_UPDATE_URL" run-update' "$INSTALLER"
+assert_contains 'bash "$file" "$@" </dev/null' "$INSTALLER"
+assert_not_contains 'run_remote_script "$SELF_UPDATE_URL" run-update' "$INSTALLER"
 
 # The full install.sh entry dispatches once and never initializes shortcut installation.
 ENTRY_STRIPPED="$TEST_ROOT/install-no-main.sh"
@@ -95,6 +97,44 @@ sed '/^main "$@"$/d' "$INSTALLER" > "$ENTRY_STRIPPED"
   run_self_update_once(){ ENTRY_CALLS=$((ENTRY_CALLS + 1)); }
   main --self-update-run
   [ "$ENTRY_CALLS" -eq 1 ] || fail "self-update entry was not called exactly once"
+)
+
+# The complete install.sh self-update entry is noninteractive and never opens /dev/tty.
+ENTRY_STRIPPED="$TEST_ROOT/install-no-main.sh"
+sed '/^main "\$@"$/d' "$INSTALLER" > "$ENTRY_STRIPPED"
+REMOTE_PAYLOAD="$TEST_ROOT/fake-self-update.sh"
+REMOTE_SCRIPT="$TEST_ROOT/downloaded-self-update.sh"
+REMOTE_RESULT="$TEST_ROOT/remote-result"
+cat > "$REMOTE_PAYLOAD" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = run-update ] || exit 41
+[ ! -t 0 ] || exit 42
+printf '%s\n' "$1" > "$REMOTE_RESULT"
+EOF
+chmod 755 "$REMOTE_PAYLOAD"
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  need_root(){ :; }
+  make_tmp(){ printf '%s' "$REMOTE_SCRIPT"; }
+  download_file(){ cp "$REMOTE_PAYLOAD" "$2"; }
+  execute_remote_script_interactive(){ fail "interactive executor was called"; }
+  main --self-update-run
+)
+assert_file_contains 'run-update' "$REMOTE_RESULT"
+
+# A noninteractive download failure returns nonzero and does not enter the menu.
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  need_root(){ :; }
+  make_tmp(){ printf '%s' "$REMOTE_SCRIPT"; }
+  download_file(){ return 1; }
+  execute_remote_script_interactive(){ fail "interactive executor was called"; }
+  if output="$(main --self-update-run 2>&1)"; then
+    fail "noninteractive download failure returned success"
+  fi
+  assert_not_contains '统一管理菜单' <(printf '%s\n' "$output")
 )
 
 # A lock miss returns nonzero, prints a clear state, and writes the same log.
