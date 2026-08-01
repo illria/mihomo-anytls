@@ -304,7 +304,129 @@ install_acme(){ [ -n "$ACME_EMAIL" ] || ask ACME_EMAIL "请输入 acme.sh 注册
 reload_cmd(){ if [ "$INSTALL_MODE" = docker ]; then echo "docker restart $CONTAINER_NAME >/dev/null 2>&1 || true"; elif [ "$CORE" = mihomo ]; then echo "systemctl restart mihomo >/dev/null 2>&1 || true"; else echo "systemctl restart sing-box >/dev/null 2>&1 || true"; fi; }
 install_acme_cert(){ mkdir -p "$CERT_DIR"; "$HOME/.acme.sh/acme.sh" --install-cert -d "$DOMAIN" --ecc --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$(reload_cmd)" || "$HOME/.acme.sh/acme.sh" --install-cert -d "$DOMAIN" --key-file "$KEY_FILE" --fullchain-file "$CERT_FILE" --reloadcmd "$(reload_cmd)"; chmod 600 "$KEY_FILE"; chmod 644 "$CERT_FILE"; }
 self_cert(){ mkdir -p "$CERT_DIR"; info "生成自签证书：$DOMAIN"; openssl req -x509 -nodes -newkey rsa:2048 -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=$DOMAIN" -addext "subjectAltName=DNS:$DOMAIN" >/dev/null 2>&1 || openssl req -x509 -nodes -newkey rsa:2048 -days 3650 -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=$DOMAIN" >/dev/null 2>&1; chmod 600 "$KEY_FILE"; chmod 644 "$CERT_FILE"; SKIP_CERT_VERIFY=true; }
-custom_cert(){ local c k; ask c "请输入证书 fullchain/cert 路径"; ask k "请输入私钥 key 路径"; [ -f "$c" ] || die "证书不存在：$c"; [ -f "$k" ] || die "私钥不存在：$k"; mkdir -p "$CERT_DIR"; cp -f "$c" "$CERT_FILE"; cp -f "$k" "$KEY_FILE"; chmod 600 "$KEY_FILE"; chmod 644 "$CERT_FILE"; SKIP_CERT_VERIFY=false; }
+collect_custom_cert_candidates(){
+  local dir="$1" name path
+  CUSTOM_CERT_CANDIDATES=()
+  for name in fullchain.pem fullchain.cer cert.pem cert.cer; do
+    path="$dir/$name"
+    [ -f "$path" ] && CUSTOM_CERT_CANDIDATES+=("$path")
+  done
+  CUSTOM_KEY_CANDIDATES=()
+  for name in privkey.pem key.pem; do
+    path="$dir/$name"
+    [ -f "$path" ] && CUSTOM_KEY_CANDIDATES+=("$path")
+  done
+  for path in "$dir"/*.key; do
+    [ -f "$path" ] && CUSTOM_KEY_CANDIDATES+=("$path")
+  done
+}
+
+resolve_custom_cert_input(){
+  local input="$1" kind="$2" count
+  CUSTOM_RESOLVED_PATH=""
+  if [ -f "$input" ]; then
+    CUSTOM_RESOLVED_PATH="$input"
+    return 0
+  fi
+  if [ ! -d "$input" ]; then
+    warn "路径不存在或不是文件/目录：$input"
+    return 1
+  fi
+  collect_custom_cert_candidates "$input"
+  if [ "$kind" = cert ]; then
+    count="${#CUSTOM_CERT_CANDIDATES[@]}"
+    if [ "$count" -eq 1 ]; then
+      CUSTOM_RESOLVED_PATH="${CUSTOM_CERT_CANDIDATES[0]}"
+      return 0
+    fi
+    [ "$count" -eq 0 ] && warn "目录中未找到证书候选（fullchain.pem/fullchain.cer/cert.pem/cert.cer）：$input"
+    [ "$count" -gt 1 ] && warn "目录中发现多个证书候选，请输入具体证书文件：$input"
+    [ "$count" -gt 1 ] && printf '  %s\n' "${CUSTOM_CERT_CANDIDATES[@]}" >&2
+  else
+    count="${#CUSTOM_KEY_CANDIDATES[@]}"
+    if [ "$count" -eq 1 ]; then
+      CUSTOM_RESOLVED_PATH="${CUSTOM_KEY_CANDIDATES[0]}"
+      return 0
+    fi
+    [ "$count" -eq 0 ] && warn "目录中未找到私钥候选（privkey.pem/key.pem/*.key）：$input"
+    [ "$count" -gt 1 ] && warn "目录中发现多个私钥候选，请输入具体私钥文件：$input"
+    [ "$count" -gt 1 ] && printf '  %s\n' "${CUSTOM_KEY_CANDIDATES[@]}" >&2
+  fi
+  return 1
+}
+
+validate_custom_cert_pair(){
+  local cert="$1" key="$2" cert_pub key_pub
+  if ! openssl x509 -in "$cert" -noout >/dev/null 2>&1; then
+    warn "证书无法解析：$cert"
+    return 1
+  fi
+  if ! openssl pkey -in "$key" -noout </dev/null >/dev/null 2>&1; then
+    warn "私钥无法解析：$key"
+    return 1
+  fi
+  if ! cert_pub="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $2}')"; then
+    warn "无法读取证书公钥：$cert"
+    return 1
+  fi
+  if ! key_pub="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | openssl dgst -sha256 2>/dev/null | awk '{print $2}')"; then
+    warn "无法读取私钥公钥：$key"
+    return 1
+  fi
+  if [ -z "$cert_pub" ] || [ -z "$key_pub" ] || [ "$cert_pub" != "$key_pub" ]; then
+    warn "证书和私钥不匹配：$cert / $key"
+    return 1
+  fi
+  return 0
+}
+
+custom_cert(){
+  local cert_input key_input cert_path key_path
+  while true; do
+    echo "自定义证书支持输入目录或具体文件路径，例如："
+    echo "  /root/cf-cert"
+    echo "  /root/cf-cert/fullchain.pem"
+    ask cert_input "请输入证书目录或文件路径"
+    cert_path=""
+    key_path=""
+
+    if [ -d "$cert_input" ]; then
+      collect_custom_cert_candidates "$cert_input"
+      if [ "${#CUSTOM_CERT_CANDIDATES[@]}" -eq 1 ] && [ "${#CUSTOM_KEY_CANDIDATES[@]}" -eq 1 ]; then
+        cert_path="${CUSTOM_CERT_CANDIDATES[0]}"
+        key_path="${CUSTOM_KEY_CANDIDATES[0]}"
+        info "自动识别证书：$cert_path"
+        info "自动识别私钥：$key_path"
+      else
+        ask cert_input "无法唯一识别，请输入具体证书文件路径"
+        resolve_custom_cert_input "$cert_input" cert || continue
+        cert_path="$CUSTOM_RESOLVED_PATH"
+        ask key_input "请输入私钥文件路径或目录"
+        resolve_custom_cert_input "$key_input" key || continue
+        key_path="$CUSTOM_RESOLVED_PATH"
+      fi
+    else
+      resolve_custom_cert_input "$cert_input" cert || continue
+      cert_path="$CUSTOM_RESOLVED_PATH"
+      ask key_input "请输入私钥文件路径或目录"
+      resolve_custom_cert_input "$key_input" key || continue
+      key_path="$CUSTOM_RESOLVED_PATH"
+    fi
+
+    if validate_custom_cert_pair "$cert_path" "$key_path"; then
+      mkdir -p "$CERT_DIR"
+      cp -f "$cert_path" "$CERT_FILE"
+      cp -f "$key_path" "$KEY_FILE"
+      chmod 600 "$KEY_FILE"
+      chmod 644 "$CERT_FILE"
+      SKIP_CERT_VERIFY=false
+      info "已使用证书：$cert_path"
+      info "已使用私钥：$key_path"
+      return 0
+    fi
+    warn "证书或私钥无效，请重新输入。"
+  done
+}
 issue_80(){ install_acme; if has ss && ss -ltn | awk '{print $4}' | grep -Eq '(^|:)80$'; then warn "80/tcp 已被占用"; confirm "仍继续尝试吗" n || die "已取消"; fi; "$HOME/.acme.sh/acme.sh" --issue --standalone -d "$DOMAIN" --keylength ec-256 --server letsencrypt; install_acme_cert; SKIP_CERT_VERIFY=false; }
 issue_cf(){ local token account zone; install_acme; ask token "请输入 Cloudflare API Token"; ask account "请输入 Cloudflare Account ID"; read -r -p "请输入 Cloudflare Zone ID [可留空]: " zone; export CF_Token="$token" CF_Account_ID="$account"; [ -n "$zone" ] && export CF_Zone_ID="$zone"; "$HOME/.acme.sh/acme.sh" --issue --dns dns_cf -d "$DOMAIN" --keylength ec-256 --server letsencrypt; install_acme_cert; SKIP_CERT_VERIFY=false; }
 
