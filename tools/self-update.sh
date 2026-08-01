@@ -9,6 +9,7 @@ BIN_SHORT="/usr/local/bin/en-mi"
 CRON_FILE="/etc/cron.d/mihomo-anytls-self-update"
 LOG_FILE="/var/log/mihomo-anytls-self-update.log"
 LOCK_FILE="/var/lock/mihomo-anytls-self-update.lock"
+UPDATE_TMP_TEMPLATE="${UPDATE_TMP_TEMPLATE:-/tmp/mihomo-anytls-update.XXXXXX}"
 
 write_log(){
   local level="$1"
@@ -50,7 +51,7 @@ install_command() (
     flock -n 9 || { warn "已有另一个更新任务运行，跳过本次更新。"; return 1; }
   fi
 
-  tmp="$(mktemp /tmp/mihomo-anytls-update.XXXXXX)" || { err "无法创建临时文件。"; return 1; }
+  tmp="$(mktemp "$UPDATE_TMP_TEMPLATE")" || { err "无法创建临时文件。"; return 1; }
   if ! download_install "$tmp"; then
     err "下载最新管理脚本失败，保留现有命令。"
     return 1
