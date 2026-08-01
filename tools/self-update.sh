@@ -209,6 +209,11 @@ detect_pkg(){
   fi
 }
 
+cron_backend_supported(){
+  detect_pkg
+  [ "$PKG_MANAGER" != apk ] && [ ! -f /etc/alpine-release ]
+}
+
 cron_daemon_present(){
   local daemon
   for daemon in cron crond cronie; do
@@ -230,8 +235,7 @@ install_cron_package(){
 }
 
 ensure_cron_daemon(){
-  detect_pkg
-  if [ "$PKG_MANAGER" = apk ] || [ -f /etc/alpine-release ]; then
+  if ! cron_backend_supported; then
     err "当前版本尚未实现 Alpine cron 后端，未启用每日自动更新。"
     return 1
   fi
@@ -453,7 +457,7 @@ next_schedule(){
 
 status(){
   local main_exists=false short_exists=false main_ok=false short_ok=false commands_match=false
-  local cron_exists=false cron_ok=false daemon_ok=false
+  local cron_exists=false cron_ok=false daemon_ok=false backend_supported=true
   echo "主命令: $BIN_MAIN"
   if [ -e "$BIN_MAIN" ]; then main_exists=true; fi
   if [ -x "$BIN_MAIN" ]; then main_ok=true; echo "  已安装且可执行"; else echo "  未安装或不可执行"; fi
@@ -464,6 +468,10 @@ status(){
     commands_match=true
   fi
   echo "当前脚本版本: $SCRIPT_VERSION"
+  if ! cron_backend_supported; then
+    backend_supported=false
+    echo "cron 后端: Alpine/apk（当前版本不支持）"
+  fi
   echo "cron 文件: $CRON_FILE"
   if [ -e "$CRON_FILE" ]; then
     cron_exists=true
@@ -481,7 +489,9 @@ status(){
     echo "下一次计划更新时间: 未设置"
   fi
   if cron_daemon_running; then daemon_ok=true; echo "cron daemon: 运行中"; else echo "cron daemon: 未运行"; fi
-  if [ "$main_exists" = false ] && [ "$short_exists" = false ]; then
+  if [ "$backend_supported" = false ]; then
+    echo "状态: 当前版本不支持 Alpine 自动更新后端"
+  elif [ "$main_exists" = false ] && [ "$short_exists" = false ]; then
     echo "状态: 未安装"
   elif [ "$main_ok" = false ] || [ "$short_ok" = false ]; then
     echo "状态: 命令安装不完整"
