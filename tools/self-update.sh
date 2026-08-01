@@ -342,8 +342,8 @@ cron_file_valid(){
 
 rollback_cron_update(){
   local ok=true
-  if [ "\${cron_transaction_rolled_back:-false}" = true ] ||
-     [ "\${cron_transaction_committed:-false}" = true ]; then
+  if [ "${cron_transaction_rolled_back:-false}" = true ] ||
+     [ "${cron_transaction_committed:-false}" = true ]; then
     return 0
   fi
   if [ "$cron_old_exists" = true ]; then
@@ -361,9 +361,9 @@ rollback_cron_update(){
 }
 handle_cron_signal(){
   local code="$1"
-  if [ "\${cron_transaction_started:-false}" = true ] &&
-     [ "\${cron_transaction_committed:-false}" = false ] &&
-     [ "\${cron_transaction_rolled_back:-false}" = false ]; then
+  if [ "${cron_transaction_started:-false}" = true ] &&
+     [ "${cron_transaction_committed:-false}" = false ] &&
+     [ "${cron_transaction_rolled_back:-false}" = false ]; then
     rollback_cron_update || true
   fi
   exit "$code"
