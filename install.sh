@@ -122,7 +122,9 @@ run_remote_script_interactive(){
   local url="$1" f
   shift || true
   f="$(make_tmp)"
-  download_file "$url" "$f"
+  if ! download_file "$url" "$f"; then
+    return 1
+  fi
   if stdin_is_interactive; then
     execute_remote_script_interactive "$f" "$@"
   elif [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null; then
@@ -135,7 +137,9 @@ run_remote_script_noninteractive(){
   local url="$1" f
   shift || true
   f="$(make_tmp)"
-  download_file "$url" "$f"
+  if ! download_file "$url" "$f"; then
+    return 1
+  fi
   execute_remote_script_noninteractive "$f" "$@"
 }
 run_remote_script(){
