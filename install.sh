@@ -104,15 +104,6 @@ download_file(){
   chmod +x "$out"
 }
 
-install_shortcuts(){
-  local tmp
-  [ -w /usr/local/bin ] || return 0
-  tmp="$(make_tmp)"
-  if download_file "$BASE_URL/install.sh" "$tmp" >/dev/null 2>&1; then
-    install -m 755 "$tmp" "$BIN_MAIN" 2>/dev/null || true
-    install -m 755 "$tmp" "$BIN_SHORT" 2>/dev/null || true
-  fi
-}
 
 run_remote_script(){
   local url="$1" f
@@ -287,7 +278,12 @@ menu(){
 
 main(){
   need_root
-  install_shortcuts || true
+  case "${1:-}" in
+    --self-update-run|self-update-run)
+      run_self_update_once
+      return
+      ;;
+  esac
   case "${1:-}" in
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
@@ -297,7 +293,6 @@ main(){
     --cert-pool|cert-pool|pool) manage_cert_pool ;;
     --outbound|outbound|proxy) configure_outbound ;;
     --self-update|self-update|update-self) manage_self_update ;;
-    --self-update-run|self-update-run) run_self_update_once ;;
     --uninstall|uninstall|remove) uninstall_tool ;;
     --status|status) service_status ;;
     --restart|restart) restart_services ;;
