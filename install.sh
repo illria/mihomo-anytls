@@ -138,11 +138,16 @@ execute_remote_script_interactive(){
   if stdin_is_interactive; then
     bash "$file" "$@"
   elif controlling_tty_available; then
-    bash "$file" "$@" </dev/tty
+    execute_remote_script_from_tty "$file" "$@"
   else
     echo "[ERR ] 交互操作需要可用的 TTY。" >&2
     return 1
   fi
+}
+execute_remote_script_from_tty(){
+  local file="$1"
+  shift
+  bash "$file" "$@" </dev/tty
 }
 execute_remote_script_noninteractive(){
   local file="$1"
