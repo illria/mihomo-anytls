@@ -30,7 +30,6 @@ set_common() {
   OUTBOUND_PORT=""
   OUTBOUND_USER=""
   OUTBOUND_PASS=""
-  OUTBOUND_GATEVPN=false
 }
 
 assert_contains() {
@@ -104,37 +103,19 @@ INPUT
   assert_contains 'password: "socks-pass"' "$CONFIG_FILE"
 }
 
-choose_outbound_gatevpn_no_auth() {
-  set_common
-  choose_outbound <<'INPUT'
-4
-INPUT
-  [ "$OUTBOUND_TYPE" = "socks5" ]
-  [ "$OUTBOUND_HOST" = "127.0.0.1" ]
-  [ "$OUTBOUND_PORT" = "7928" ]
-  [ "$OUTBOUND_UDP" = true ]
-  [ "$OUTBOUND_GATEVPN" = true ]
-  [ -z "$OUTBOUND_USER" ]
-  [ -z "$OUTBOUND_PASS" ]
-  CONFIG_FILE="$TMP_ROOT/gatevpn-no-auth.yaml"
-  write_mihomo_config
-  assert_not_contains 'username:' "$CONFIG_FILE"
-  assert_not_contains 'password:' "$CONFIG_FILE"
-}
 
 choose_outbound_http_no_auth
 choose_outbound_http_auth
 choose_outbound_socks_auth
-choose_outbound_gatevpn_no_auth
 set_common
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="7928"
+OUTBOUND_PORT="1080"
 OUTBOUND_UDP=true
-write_mihomo_case gatevpn
+write_mihomo_case socks5-udp-config
 assert_contains 'type: socks5' "$CONFIG_FILE"
 assert_contains 'server: "127.0.0.1"' "$CONFIG_FILE"
-assert_contains 'port: 7928' "$CONFIG_FILE"
+assert_contains 'port: 1080' "$CONFIG_FILE"
 assert_contains 'udp: true' "$CONFIG_FILE"
 assert_contains '  - MATCH,upstream-out' "$CONFIG_FILE"
 assert_not_contains 'NETWORK,UDP,DIRECT' "$CONFIG_FILE"
@@ -159,7 +140,7 @@ assert_not_contains 'udp: true' "$CONFIG_FILE"
 set_common
 OUTBOUND_TYPE="http"
 OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="7928"
+OUTBOUND_PORT="1080"
 OUTBOUND_UDP=false
 write_mihomo_case http
 assert_contains 'type: http' "$CONFIG_FILE"
@@ -180,7 +161,7 @@ CORE="sing-box"
 CONFIG_FILE="$TMP_ROOT/sing-box.json"
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="7928"
+OUTBOUND_PORT="1080"
 OUTBOUND_UDP=true
 write_singbox_config
 python3 - "$CONFIG_FILE" <<'PY'
@@ -193,7 +174,7 @@ outbound = config["outbounds"][0]
 assert outbound["type"] == "socks"
 assert outbound["version"] == "5"
 assert outbound["server"] == "127.0.0.1"
-assert outbound["server_port"] == 7928
+assert outbound["server_port"] == 1080
 assert "udp" not in outbound
 assert "network" not in outbound
 assert config["route"]["final"] == "upstream-out"
@@ -219,7 +200,7 @@ CORE="sing-box"
 CONFIG_FILE="$TMP_ROOT/sing-http.json"
 OUTBOUND_TYPE="http"
 OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="7928"
+OUTBOUND_PORT="1080"
 OUTBOUND_UDP=false
 write_singbox_config
 python3 - "$CONFIG_FILE" <<'PY'
@@ -236,7 +217,7 @@ ENV_FILE="$TMP_ROOT/install.env"
 printf 'CORE="mihomo"\nOUTBOUND_TYPE="socks5"\n' > "$ENV_FILE"
 OUTBOUND_TYPE="socks5"
 OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="7928"
+OUTBOUND_PORT="1080"
 OUTBOUND_USER=""
 OUTBOUND_PASS="must-not-be-written"
 OUTBOUND_NAME="upstream-out"
@@ -344,25 +325,6 @@ if check_socks5_udp_associate 127.0.0.1 "$REFUSED_PORT"; then
   echo "expected connection-refused SOCKS5 UDP check failure" >&2
   exit 1
 fi
-
-OUTBOUND_TYPE="socks5"
-OUTBOUND_HOST="127.0.0.1"
-OUTBOUND_PORT="$REFUSED_PORT"
-OUTBOUND_UDP=true
-OUTBOUND_GATEVPN=true
-if printf 'n\n' | precheck_gatevpn; then
-  echo "failed GateVPN precheck must not be accepted by default" >&2
-  exit 1
-fi
-[ "$OUTBOUND_TYPE" = "socks5" ]
-[ "$OUTBOUND_UDP" = true ]
-if ! printf 'y\n' | precheck_gatevpn; then
-  echo "explicitly retaining failed SOCKS5 UDP config should succeed" >&2
-  exit 1
-fi
-[ "$OUTBOUND_TYPE" = "socks5" ]
-[ "$OUTBOUND_UDP" = true ]
-[ "$OUTBOUND_GATEVPN" = true ]
 
 test_apply_config_rollback() {
   local kind="$1" existing="$2" original=""
