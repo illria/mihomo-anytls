@@ -223,7 +223,8 @@ cron_daemon_running(){ [ "${STATUS_DAEMON:-false}" = true ]; }
 status > "$TEST_ROOT/status-bad-mode"
 assert_file_contains '状态: cron 配置无效' "$TEST_ROOT/status-bad-mode"
 write_cron
-sed -i 's/--self-update-run/--wrong-entrypoint/' "$CRON_FILE"
+sed -i.bak 's/--self-update-run/--wrong-entrypoint/' "$CRON_FILE"
+rm -f -- "$CRON_FILE.bak"
 status > "$TEST_ROOT/status-bad-entrypoint"
 assert_file_contains '状态: cron 配置无效' "$TEST_ROOT/status-bad-entrypoint"
 
