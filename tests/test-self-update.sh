@@ -112,6 +112,7 @@ cat > "$REMOTE_PAYLOAD" <<'EOF'
 printf '%s\n' "$1" > "$REMOTE_RESULT"
 EOF
 chmod 755 "$REMOTE_PAYLOAD"
+export REMOTE_RESULT
 (
   # shellcheck disable=SC1090
   source "$ENTRY_STRIPPED"
