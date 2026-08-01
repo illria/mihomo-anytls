@@ -292,17 +292,17 @@ cron_file_valid(){
 }
 
 save_cron_backup(){
-  local cron_dir="$1" outvar="$2" backup
+  local cron_dir="$1" outvar="$2" saved
   if [ ! -e "$CRON_FILE" ]; then
     printf -v "$outvar" '%s' ""
     return 0
   fi
-  backup="$(mktemp "$cron_dir/.mihomo-anytls-self-update.backup.XXXXXX")" || return 1
-  if ! cp -p "$CRON_FILE" "$backup"; then
-    rm -f -- "$backup"
+  saved="$(mktemp "$cron_dir/.mihomo-anytls-self-update.backup.XXXXXX")" || return 1
+  if ! cp -p "$CRON_FILE" "$saved"; then
+    rm -f -- "$saved"
     return 1
   fi
-  printf -v "$outvar" '%s' "$backup"
+  printf -v "$outvar" '%s' "$saved"
 }
 restore_cron_backup(){
   local backup="$1" existed="$2" ok=true
