@@ -138,58 +138,6 @@ choose_outbound(){
   fi
 }
 
-check_socks5_udp_associate(){
-  local host="${1:-}" port="${2:-}"
-  [ -n "$host" ] || return 1
-  [[ "$port" =~ ^[0-9]+$ ]] || return 1
-  has python3 || return 1
-  python3 - "$host" "$port" <<'PY'
-import socket
-import sys
-
-host = sys.argv[1]
-port = int(sys.argv[2])
-
-def recv_exact(sock, size):
-    data = b""
-    while len(data) < size:
-        chunk = sock.recv(size - len(data))
-        if not chunk:
-            raise RuntimeError("truncated SOCKS5 response")
-        data += chunk
-    return data
-
-try:
-    with socket.create_connection((host, port), timeout=3) as sock:
-        sock.settimeout(3)
-        sock.sendall(b"\x05\x01\x00")
-        if recv_exact(sock, 2) != b"\x05\x00":
-            raise RuntimeError("SOCKS5 no-auth negotiation failed")
-
-        sock.sendall(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")
-        header = recv_exact(sock, 4)
-        if header[0] != 5 or header[1] != 0 or header[2] != 0:
-            raise RuntimeError("UDP ASSOCIATE returned an invalid header")
-        atyp = header[3]
-        if atyp == 1:
-            recv_exact(sock, 4)
-        elif atyp == 3:
-            length = recv_exact(sock, 1)[0]
-            recv_exact(sock, length)
-        elif atyp == 4:
-            recv_exact(sock, 16)
-        else:
-            raise RuntimeError("unsupported SOCKS5 BND.ADDR type")
-        bnd_port = int.from_bytes(recv_exact(sock, 2), "big")
-        if bnd_port == 0:
-            raise RuntimeError("UDP ASSOCIATE returned port 0")
-except Exception as exc:
-    print("SOCKS5 UDP ASSOCIATE check failed: %s" % exc, file=sys.stderr)
-    raise SystemExit(1)
-PY
-}
-
-
 backup_config(){
   BACKUP_CONFIG=""
   [ -f "$CONFIG_FILE" ] || return 0
