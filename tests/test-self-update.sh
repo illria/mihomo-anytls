@@ -156,7 +156,7 @@ printf '%s\n' 'old-short' > "$BIN_SHORT"
 BACKUP_SEEN="$TEST_ROOT/update-backup-seen"
 after_main_replaced_hook(){
   find "$BIN_DIR" -type f -name '.*.backup.*' -print -quit > "$BACKUP_SEEN"
-  kill -INT "$BASHPID"
+  handle_update_signal 130
 }
 if run_update >"$TEST_ROOT/signal-update.out" 2>&1; then fail "signal update returned success"; fi
 assert_file_contains 'old-main' "$BIN_MAIN"
@@ -247,7 +247,7 @@ cp -p "$CRON_FILE" "$OLD_CRON"
 CRON_BACKUP_SEEN="$TEST_ROOT/cron-backup-seen"
 after_cron_replaced_hook(){
   find "$(dirname "$CRON_FILE")" -type f -name '.*.backup.*' -print -quit > "$CRON_BACKUP_SEEN"
-  kill -INT "$BASHPID"
+  handle_cron_signal 130
 }
 if install_cron >"$TEST_ROOT/signal-cron.out" 2>&1; then fail "signal cron update returned success"; fi
 cmp -s "$OLD_CRON" "$CRON_FILE" || fail "signal cron update did not restore old cron"
