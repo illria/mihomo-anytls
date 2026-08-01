@@ -172,8 +172,8 @@ assert_file_contains 'run-update' "$REMOTE_RESULT"
   wget(){
     case "$MODE" in
       wget-fail) return 8 ;;
-      wget-empty) : > "$4" ;;
-      wget-syntax) printf '%s\n' '#!/usr/bin/env bash' 'if (' > "$4" ;;
+      wget-empty) : > "$3" ;;
+      wget-syntax) printf '%s\n' '#!/usr/bin/env bash' 'if (' > "$3" ;;
       wget-valid) printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$1" > "$RESULT"' > "$4" ;;
     esac
   }
