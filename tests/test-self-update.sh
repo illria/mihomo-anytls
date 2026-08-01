@@ -151,9 +151,9 @@ assert_file_contains 'run-update' "$REMOTE_RESULT"
   MODE=curl-fail
   CHMOD_CALLED=false
   has(){
-    case "$MODE:$1" in
-      curl-*:) return 0 ;;
-      wget-*:) return 0 ;;
+    case "$1" in
+      curl) [[ "$MODE" == curl-* ]] && return 0 ;;
+      wget) [[ "$MODE" == wget-* ]] && return 0 ;;
     esac
     return 1
   }
