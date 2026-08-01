@@ -319,6 +319,7 @@ collect_custom_cert_candidates(){
   for path in "$dir"/*.key; do
     [ -f "$path" ] && CUSTOM_KEY_CANDIDATES+=("$path")
   done
+  return 0
 }
 
 resolve_custom_cert_input(){
