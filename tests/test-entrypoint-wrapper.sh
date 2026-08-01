@@ -11,13 +11,18 @@ if grep -Fq 'patch_main_installer' "$ENTRY"; then
   exit 1
 fi
 
-run_remote="$(sed -n '/^run_remote_script(){/,/^}/p' "$ENTRY")"
-[ -n "$run_remote" ] || { echo "run_remote_script function not found" >&2; exit 1; }
-grep -Fq 'download_file "$url" "$f"' <<<"$run_remote"
-grep -Fq 'bash "$f" "$@"' <<<"$run_remote"
+interactive="$(sed -n '/^run_remote_script_interactive(){/,/^}/p' "$ENTRY")"
+noninteractive="$(sed -n '/^run_remote_script_noninteractive(){/,/^}/p' "$ENTRY")"
+[ -n "$interactive" ] || { echo "interactive remote runner not found" >&2; exit 1; }
+[ -n "$noninteractive" ] || { echo "noninteractive remote runner not found" >&2; exit 1; }
+grep -Fq 'download_file "$url" "$f"' <<<"$interactive"
+grep -Fq 'execute_remote_script_interactive "$f" "$@"' <<<"$interactive"
+grep -Fq 'download_file "$url" "$f"' <<<"$noninteractive"
+grep -Fq 'execute_remote_script_noninteractive "$f" "$@"' <<<"$noninteractive"
+grep -Fq 'bash "$file" "$@" </dev/null' "$ENTRY"
 
-if grep -Eq 'python3|re\.sub|patch_main_installer' <<<"$run_remote"; then
-  echo "run_remote_script still mutates the downloaded installer" >&2
+if grep -Eq 'python3|re.sub|patch_main_installer' <<<"$interactive$noninteractive"; then
+  echo "remote runner still mutates the downloaded installer" >&2
   exit 1
 fi
 
