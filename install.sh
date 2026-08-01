@@ -133,6 +133,7 @@ ssl_manager(){ run_remote_script "$SSL_MANAGER_URL" "$@"; }
 manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
 configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
 manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
+run_self_update_once(){ run_remote_script "$SELF_UPDATE_URL" run-update; }
 uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
 repair_local_cert(){
@@ -296,6 +297,7 @@ main(){
     --cert-pool|cert-pool|pool) manage_cert_pool ;;
     --outbound|outbound|proxy) configure_outbound ;;
     --self-update|self-update|update-self) manage_self_update ;;
+    --self-update-run|self-update-run) run_self_update_once ;;
     --uninstall|uninstall|remove) uninstall_tool ;;
     --status|status) service_status ;;
     --restart|restart) restart_services ;;
