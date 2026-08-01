@@ -22,5 +22,5 @@ jobs:
       - name: Check custom certificate path handling
         run: bash tests/test-custom-cert.sh
 
-      - name: Check GateVPN SOCKS5 UDP behavior
+      - name: Check SOCKS5 UDP outbound behavior
         run: bash tests/test-outbound-socks5-udp.sh
