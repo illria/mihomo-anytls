@@ -40,6 +40,7 @@ STRIPPED="$TEST_ROOT/self-update-no-main.sh"
 sed '/^main "\$@"$/d' "$TOOL" > "$STRIPPED"
 # shellcheck disable=SC1090
 source "$STRIPPED"
+ORIGINAL_ENSURE_CRON_DAEMON="$(declare -f ensure_cron_daemon)"
 
 BIN_DIR="$TEST_ROOT/bin"
 mkdir -p "$BIN_DIR"
@@ -232,6 +233,7 @@ eval "$ORIGINAL_CRON_FILE_VALID"
 assert_no_update_temps
 
 # A stopped Alpine backend is explicitly rejected without installing or writing cron.
+eval "$ORIGINAL_ENSURE_CRON_DAEMON"
 install_command(){ :; }
 detect_pkg(){ PKG_MANAGER=apk; }
 cron_daemon_running(){ return 1; }
