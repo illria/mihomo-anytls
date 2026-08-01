@@ -14,9 +14,13 @@ jobs:
         run: |
           bash -n install.sh
           bash -n mihomo-anytls-install.sh
+          bash -n tools/configure-outbound-proxy.sh
       - name: Check config writer dispatch
         run: bash tests/test-installer-config-writer.sh
       - name: Check entrypoint wrapper
         run: bash tests/test-entrypoint-wrapper.sh
       - name: Check custom certificate path handling
         run: bash tests/test-custom-cert.sh
+
+      - name: Check SOCKS5 UDP outbound behavior
+        run: bash tests/test-outbound-socks5-udp.sh

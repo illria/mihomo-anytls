@@ -14,6 +14,7 @@ CERT_FILE=""
 KEY_FILE=""
 INSTALL_MODE=""
 OUTBOUND_TYPE="direct"
+OUTBOUND_UDP="false"
 OUTBOUND_HOST=""
 OUTBOUND_PORT=""
 OUTBOUND_USER=""
@@ -62,19 +63,20 @@ load_env(){
   CERT_FILE="$(read_env_value "$ENV_FILE" CERT_FILE || true)"
   KEY_FILE="$(read_env_value "$ENV_FILE" KEY_FILE || true)"
   INSTALL_MODE="$(read_env_value "$ENV_FILE" INSTALL_MODE || true)"
-
   [ -n "$CORE" ] || die "安装记录缺少 CORE。"
   [ -n "$PROTOCOL" ] || die "安装记录缺少 PROTOCOL。"
   [ -n "$CONFIG_FILE" ] || die "安装记录缺少 CONFIG_FILE。"
 }
 
 choose_outbound(){
-  local x auth
+  local x auth udp_answer
+  OUTBOUND_USER=""
+  OUTBOUND_PASS=""
   echo "当前节点: $CORE / $PROTOCOL / $DOMAIN:$PORT"
   echo
   echo "请选择出口方式："
   echo "  1) DIRECT 直连"
-  echo "  2) HTTP 出口代理"
+  echo "  2) HTTP/TCP 出口代理（不支持 UDP/WebRTC）"
   echo "  3) SOCKS5 出口代理"
   read -r -p "输入序号 [1]: " x
   x="${x:-1}"
@@ -82,9 +84,13 @@ choose_outbound(){
   case "$x" in
     1|direct|DIRECT)
       OUTBOUND_TYPE="direct"
+      OUTBOUND_HOST=""
+      OUTBOUND_PORT=""
+      OUTBOUND_UDP=false
       ;;
     2|http|HTTP)
       OUTBOUND_TYPE="http"
+      OUTBOUND_UDP=false
       read -r -p "HTTP 代理地址: " OUTBOUND_HOST
       read -r -p "HTTP 代理端口: " OUTBOUND_PORT
       ;;
@@ -92,21 +98,30 @@ choose_outbound(){
       OUTBOUND_TYPE="socks5"
       read -r -p "SOCKS5 代理地址: " OUTBOUND_HOST
       read -r -p "SOCKS5 代理端口: " OUTBOUND_PORT
+      read -r -p "是否启用 SOCKS5 UDP ASSOCIATE？[Y/n]: " udp_answer
+      udp_answer="${udp_answer:-y}"
+      case "$udp_answer" in
+        y|Y|yes|YES) OUTBOUND_UDP=true ;;
+        *) OUTBOUND_UDP=false ;;
+      esac
       ;;
+
     *) die "无效出口方式：$x" ;;
   esac
 
   if [ "$OUTBOUND_TYPE" != "direct" ]; then
     [ -n "$OUTBOUND_HOST" ] || die "代理地址不能为空。"
     [[ "$OUTBOUND_PORT" =~ ^[0-9]+$ ]] || die "代理端口必须是数字。"
-    read -r -p "是否需要用户名密码认证？[y/N]: " auth
-    auth="${auth:-n}"
-    case "$auth" in
-      y|Y|yes|YES)
-        read -r -p "代理用户名: " OUTBOUND_USER
-        read -r -p "代理密码: " OUTBOUND_PASS
-        ;;
-    esac
+    if [ "$OUTBOUND_TYPE" = "http" ] || [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      read -r -p "是否需要用户名密码认证？[y/N]: " auth
+      auth="${auth:-n}"
+      case "$auth" in
+        y|Y|yes|YES)
+          read -r -p "代理用户名: " OUTBOUND_USER
+          read -r -p "代理密码: " OUTBOUND_PASS
+          ;;
+      esac
+    fi
   fi
 }
 
@@ -118,7 +133,7 @@ backup_config(){
 }
 
 write_mihomo_config(){
-  local sec proxy_type yh yp host port user pass
+  local sec proxy_type host port user pass
   sec="$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | cut -c1-32)"
   host="$(yaml_escape "$OUTBOUND_HOST")"
   port="$OUTBOUND_PORT"
@@ -158,16 +173,29 @@ proxies:
     server: "$host"
     port: $port
 EOF
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      cat >> "$CONFIG_FILE" <<EOF
+    udp: ${OUTBOUND_UDP:-false}
+EOF
+    fi
     if [ -n "$OUTBOUND_USER" ]; then
       cat >> "$CONFIG_FILE" <<EOF
     username: "$user"
     password: "$pass"
 EOF
     fi
-    cat >> "$CONFIG_FILE" <<EOF
+    if [ "$OUTBOUND_TYPE" = "socks5" ] && [ "${OUTBOUND_UDP:-false}" = true ]; then
+      cat >> "$CONFIG_FILE" <<EOF
 rules:
   - MATCH,$OUTBOUND_NAME
 EOF
+    else
+      cat >> "$CONFIG_FILE" <<EOF
+rules:
+  - NETWORK,UDP,REJECT
+  - MATCH,$OUTBOUND_NAME
+EOF
+    fi
   fi
 }
 
@@ -187,7 +215,10 @@ singbox_outbound_json(){
       printf '}'
       ;;
     socks5)
-      printf '{"type":"socks","tag":"%s","server":"%s","server_port":%s' "$OUTBOUND_NAME" "$h" "$OUTBOUND_PORT"
+      printf '{"type":"socks","tag":"%s","server":"%s","server_port":%s,"version":"5"' "$OUTBOUND_NAME" "$h" "$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" != true ]; then
+        printf ',"network":"tcp"'
+      fi
       [ -n "$OUTBOUND_USER" ] && printf ',"username":"%s","password":"%s"' "$u" "$p"
       printf '}'
       ;;
@@ -230,13 +261,14 @@ EOF
 write_outbound_env(){
   local tmp
   tmp="$(mktemp)"
-  grep -Ev '^(OUTBOUND_TYPE|OUTBOUND_HOST|OUTBOUND_PORT|OUTBOUND_USER|OUTBOUND_NAME)=' "$ENV_FILE" > "$tmp" || true
+  grep -Ev '^(OUTBOUND_TYPE|OUTBOUND_HOST|OUTBOUND_PORT|OUTBOUND_USER|OUTBOUND_NAME|OUTBOUND_UDP)=' "$ENV_FILE" > "$tmp" || true
   cat >> "$tmp" <<EOF
 OUTBOUND_TYPE="$OUTBOUND_TYPE"
 OUTBOUND_HOST="$OUTBOUND_HOST"
 OUTBOUND_PORT="$OUTBOUND_PORT"
 OUTBOUND_USER="$OUTBOUND_USER"
 OUTBOUND_NAME="$OUTBOUND_NAME"
+OUTBOUND_UDP="${OUTBOUND_UDP:-false}"
 EOF
   cat "$tmp" > "$ENV_FILE"
   rm -f "$tmp"
@@ -262,9 +294,47 @@ show_summary(){
   echo "协议: $PROTOCOL"
   echo "配置文件: $CONFIG_FILE"
   echo "出口方式: $OUTBOUND_TYPE"
-  if [ "$OUTBOUND_TYPE" != "direct" ]; then
-    echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
-    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+  if [ "$CORE" = "mihomo" ]; then
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" = true ]; then
+        echo "SOCKS5 UDP: 已启用"
+        echo "UDP 出口: $OUTBOUND_NAME"
+        echo "未配置 UDP DIRECT 回退"
+      else
+        echo "SOCKS5 UDP: 已禁用"
+        echo "UDP 处理: REJECT"
+        echo "UDP 回退 DIRECT: 禁止"
+      fi
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    elif [ "$OUTBOUND_TYPE" = "http" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      echo "UDP 支持: 不支持"
+      echo "UDP 处理: REJECT"
+      echo "WebRTC/STUN: 将被拒绝，不会回退 DIRECT"
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    else
+      echo "UDP 支持: 不启用出口 UDP"
+    fi
+  else
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" = true ]; then
+        echo "SOCKS5 UDP: 已启用"
+        echo "出站网络: TCP + UDP"
+      else
+        echo "SOCKS5 UDP: 已禁用"
+        echo "出站网络: TCP only"
+      fi
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    elif [ "$OUTBOUND_TYPE" = "http" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      echo "UDP 支持: 不支持"
+      echo "WebRTC/STUN: 不会通过该 HTTP 出口"
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    else
+      echo "UDP 支持: 不启用出口 UDP"
+    fi
   fi
   echo "------------------------------------------------------------"
 }
