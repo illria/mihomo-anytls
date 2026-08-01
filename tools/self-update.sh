@@ -73,8 +73,7 @@ install_command() (
     dir="$(dirname "$target")" || return 1
     [ -d "$dir" ] || { err "目标目录不存在: $dir"; return 1; }
     base="$(basename "$target")"
-    stage="$(mktemp ".${base}.update.XXXXXX" 2>/dev/null || true)"
-    [ -n "$stage" ] || stage="$(mktemp "$dir/.${base}.update.XXXXXX")" || return 1
+    stage="$(mktemp "$dir/.${base}.update.XXXXXX")" || return 1
     if ! install -m 755 "$tmp" "$stage"; then
       rm -f -- "$stage"
       return 1
