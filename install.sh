@@ -105,16 +105,41 @@ download_file(){
 }
 
 
-run_remote_script(){
+stdin_is_interactive(){
+  [ -t 0 ]
+}
+execute_remote_script_interactive(){
+  local file="$1"
+  shift
+  bash "$file" "$@"
+}
+execute_remote_script_noninteractive(){
+  local file="$1"
+  shift
+  bash "$file" "$@" </dev/null
+}
+run_remote_script_interactive(){
   local url="$1" f
   shift || true
   f="$(make_tmp)"
   download_file "$url" "$f"
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    bash "$f" "$@" < /dev/tty
+  if stdin_is_interactive; then
+    execute_remote_script_interactive "$f" "$@"
+  elif [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null; then
+    execute_remote_script_interactive "$f" "$@"
   else
-    bash "$f" "$@"
+    execute_remote_script_noninteractive "$f" "$@"
   fi
+}
+run_remote_script_noninteractive(){
+  local url="$1" f
+  shift || true
+  f="$(make_tmp)"
+  download_file "$url" "$f"
+  execute_remote_script_noninteractive "$f" "$@"
+}
+run_remote_script(){
+  run_remote_script_interactive "$@"
 }
 
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
@@ -124,7 +149,7 @@ ssl_manager(){ run_remote_script "$SSL_MANAGER_URL" "$@"; }
 manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
 configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
 manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
-run_self_update_once(){ run_remote_script "$SELF_UPDATE_URL" run-update; }
+run_self_update_once(){ run_remote_script_noninteractive "$SELF_UPDATE_URL" run-update; }
 uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
 repair_local_cert(){
