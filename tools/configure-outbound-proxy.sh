@@ -294,26 +294,47 @@ show_summary(){
   echo "协议: $PROTOCOL"
   echo "配置文件: $CONFIG_FILE"
   echo "出口方式: $OUTBOUND_TYPE"
-  if [ "$OUTBOUND_TYPE" = "socks5" ]; then
-    echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
-    if [ "${OUTBOUND_UDP:-false}" = true ]; then
-      echo "SOCKS5 UDP: 已启用"
-      echo "UDP 出口: $OUTBOUND_NAME"
-      echo "未配置 UDP DIRECT 回退"
-    else
-      echo "SOCKS5 UDP: 已禁用"
+  if [ "$CORE" = "mihomo" ]; then
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" = true ]; then
+        echo "SOCKS5 UDP: 已启用"
+        echo "UDP 出口: $OUTBOUND_NAME"
+        echo "未配置 UDP DIRECT 回退"
+      else
+        echo "SOCKS5 UDP: 已禁用"
+        echo "UDP 处理: REJECT"
+        echo "UDP 回退 DIRECT: 禁止"
+      fi
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    elif [ "$OUTBOUND_TYPE" = "http" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      echo "UDP 支持: 不支持"
       echo "UDP 处理: REJECT"
-      echo "UDP 回退 DIRECT: 禁止"
+      echo "WebRTC/STUN: 将被拒绝，不会回退 DIRECT"
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    else
+      echo "UDP 支持: 不启用出口 UDP"
     fi
-    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
-  elif [ "$OUTBOUND_TYPE" = "http" ]; then
-    echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
-    echo "UDP 支持: 不支持"
-    echo "UDP 处理: REJECT"
-    echo "WebRTC/STUN: 将被拒绝，不会回退 DIRECT"
-    [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
   else
-    echo "UDP 支持: 不启用出口 UDP"
+    if [ "$OUTBOUND_TYPE" = "socks5" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      if [ "${OUTBOUND_UDP:-false}" = true ]; then
+        echo "SOCKS5 UDP: 已启用"
+        echo "出站网络: TCP + UDP"
+      else
+        echo "SOCKS5 UDP: 已禁用"
+        echo "出站网络: TCP only"
+      fi
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    elif [ "$OUTBOUND_TYPE" = "http" ]; then
+      echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
+      echo "UDP 支持: 不支持"
+      echo "WebRTC/STUN: 不会通过该 HTTP 出口"
+      [ -n "$OUTBOUND_USER" ] && echo "出口认证: $OUTBOUND_USER / ******"
+    else
+      echo "UDP 支持: 不启用出口 UDP"
+    fi
   fi
   echo "------------------------------------------------------------"
 }
