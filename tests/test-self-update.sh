@@ -83,6 +83,9 @@ assert_no_update_temps
 assert_contains '--self-update-run' "$INSTALLER"
 assert_contains 'run_remote_script_noninteractive "$SELF_UPDATE_URL" run-update' "$INSTALLER"
 assert_contains 'bash "$file" "$@" </dev/null' "$INSTALLER"
+assert_contains 'execute_remote_script_from_tty "$file" "$@"' "$INSTALLER"
+assert_contains 'bash "$file" "$@" </dev/tty' "$INSTALLER"
+assert_not_contains '/dev/tty' "$TOOL"
 assert_not_contains 'run_remote_script "$SELF_UPDATE_URL" run-update' "$INSTALLER"
 
 # The full install.sh entry dispatches once and never initializes shortcut installation.
@@ -138,6 +141,121 @@ assert_file_contains 'run-update' "$REMOTE_RESULT"
   assert_not_contains '统一管理菜单' <(printf '%s\n' "$output")
 )
 
+# Exercise the production download_file implementation with curl/wget mocks.
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  DOWNLOAD_OUT="$TEST_ROOT/raw-download"
+  RESULT="$TEST_ROOT/raw-result"
+  export RESULT
+  MODE=curl-fail
+  CHMOD_CALLED=false
+  has(){
+    case "$MODE:$1" in
+      curl-*:) return 0 ;;
+      wget-*:) return 0 ;;
+    esac
+    return 1
+  }
+  chmod(){
+    CHMOD_CALLED=true
+    command chmod "$@"
+  }
+  curl(){
+    case "$MODE" in
+      curl-fail) return 7 ;;
+      curl-empty) : > "$8" ;;
+      curl-syntax) printf '%s\n' '#!/usr/bin/env bash' 'if (' > "$8" ;;
+      curl-valid) printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$1" > "$RESULT"' > "$8" ;;
+    esac
+  }
+  wget(){
+    case "$MODE" in
+      wget-fail) return 8 ;;
+      wget-empty) : > "$4" ;;
+      wget-syntax) printf '%s\n' '#!/usr/bin/env bash' 'if (' > "$4" ;;
+      wget-valid) printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$1" > "$RESULT"' > "$4" ;;
+    esac
+  }
+
+  MODE=curl-fail
+  rm -f -- "$DOWNLOAD_OUT"
+  if download_file https://example.invalid/curl "$DOWNLOAD_OUT"; then fail "curl failure returned success"; fi
+  [ "$CHMOD_CALLED" = false ] || fail "curl failure reached chmod"
+  [ ! -e "$DOWNLOAD_OUT" ] || fail "curl failure left output"
+
+  MODE=wget-fail
+  CHMOD_CALLED=false
+  rm -f -- "$DOWNLOAD_OUT"
+  if download_file https://example.invalid/wget "$DOWNLOAD_OUT"; then fail "wget failure returned success"; fi
+  [ "$CHMOD_CALLED" = false ] || fail "wget failure reached chmod"
+  [ ! -e "$DOWNLOAD_OUT" ] || fail "wget failure left output"
+
+  MODE=curl-empty
+  CHMOD_CALLED=false
+  if download_file https://example.invalid/empty "$DOWNLOAD_OUT"; then fail "empty curl download returned success"; fi
+  [ "$CHMOD_CALLED" = false ] || fail "empty download reached chmod"
+  [ ! -e "$DOWNLOAD_OUT" ] || fail "empty download left output"
+
+  MODE=curl-syntax
+  CHMOD_CALLED=false
+  if download_file https://example.invalid/syntax "$DOWNLOAD_OUT"; then fail "syntax error returned success"; fi
+  [ "$CHMOD_CALLED" = false ] || fail "syntax error reached chmod"
+  [ ! -e "$DOWNLOAD_OUT" ] || fail "syntax error left output"
+
+  MODE=wget-valid
+  CHMOD_CALLED=false
+  download_file https://example.invalid/valid "$DOWNLOAD_OUT"
+  [ -x "$DOWNLOAD_OUT" ] || fail "valid download was not executable"
+  bash "$DOWNLOAD_OUT" run-update
+  assert_file_contains 'run-update' "$RESULT"
+
+  MODE=curl-valid
+  chmod(){
+    return 1
+  }
+  rm -f -- "$DOWNLOAD_OUT"
+  if download_file https://example.invalid/chmod "$DOWNLOAD_OUT"; then fail "chmod failure returned success"; fi
+  [ ! -e "$DOWNLOAD_OUT" ] || fail "chmod failure left output"
+)
+# The production interactive executor selects direct stdin, controlling TTY, or a clear error.
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  FAKE_SCRIPT="$TEST_ROOT/interactive-script"
+  DIRECT_RESULT="$TEST_ROOT/direct-stdin"
+  TTY_RESULT="$TEST_ROOT/tty-stdin"
+  printf '%s\n' '#!/usr/bin/env bash' > "$FAKE_SCRIPT"
+  stdin_is_interactive(){ return 0; }
+  bash(){
+    if [ "$1" = "$FAKE_SCRIPT" ]; then
+      : > "$DIRECT_RESULT"
+      return 0
+    fi
+    command bash "$@"
+  }
+  execute_remote_script_interactive "$FAKE_SCRIPT" direct
+  [ -f "$DIRECT_RESULT" ] || fail "TTY stdin branch was not selected"
+)
+(
+  # shellcheck disable=SC1090
+  source "$ENTRY_STRIPPED"
+  FAKE_SCRIPT="$TEST_ROOT/interactive-script-tty"
+  TTY_RESULT="$TEST_ROOT/tty-stdin"
+  printf '%s\n' '#!/usr/bin/env bash' > "$FAKE_SCRIPT"
+  stdin_is_interactive(){ return 1; }
+  controlling_tty_available(){ return 0; }
+  execute_remote_script_from_tty(){
+    [ "$1" = "$FAKE_SCRIPT" ] || fail "wrong TTY script"
+    : > "$TTY_RESULT"
+  }
+  execute_remote_script_interactive "$FAKE_SCRIPT" tty
+  [ -f "$TTY_RESULT" ] || fail "controlling TTY branch was not selected"
+  controlling_tty_available(){ return 1; }
+  if execute_remote_script_interactive "$FAKE_SCRIPT" no-tty; then
+    fail "interactive executor succeeded without a TTY"
+  fi
+)
 # A lock miss returns nonzero, prints a clear state, and writes the same log.
 flock(){
   printf '%s\n' "$*" >> "$LOCK_CALLS"
