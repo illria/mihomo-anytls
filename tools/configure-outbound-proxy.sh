@@ -135,7 +135,9 @@ choose_outbound(){
   if [ "$OUTBOUND_TYPE" != "direct" ]; then
     [ -n "$OUTBOUND_HOST" ] || die "代理地址不能为空。"
     [[ "$OUTBOUND_PORT" =~ ^[0-9]+$ ]] || die "代理端口必须是数字。"
-    if [ "$OUTBOUND_TYPE" = "socks5" ] && [ "$OUTBOUND_GATEVPN" != true ]; then
+    if [ "$OUTBOUND_TYPE" = "http" ] || {
+      [ "$OUTBOUND_TYPE" = "socks5" ] && [ "$OUTBOUND_GATEVPN" != true ]
+    }; then
       read -r -p "是否需要用户名密码认证？[y/N]: " auth
       auth="${auth:-n}"
       case "$auth" in
@@ -178,8 +180,8 @@ try:
 
         sock.sendall(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")
         header = recv_exact(sock, 4)
-        if header[0] != 5 or header[1] != 0:
-            raise RuntimeError("UDP ASSOCIATE returned a failure")
+        if header[0] != 5 or header[1] != 0 or header[2] != 0:
+            raise RuntimeError("UDP ASSOCIATE returned an invalid header")
         atyp = header[3]
         if atyp == 1:
             recv_exact(sock, 4)
@@ -190,7 +192,9 @@ try:
             recv_exact(sock, 16)
         else:
             raise RuntimeError("unsupported SOCKS5 BND.ADDR type")
-        recv_exact(sock, 2)
+        bnd_port = int.from_bytes(recv_exact(sock, 2), "big")
+        if bnd_port == 0:
+            raise RuntimeError("UDP ASSOCIATE returned port 0")
 except Exception as exc:
     print("GateVPN SOCKS5 UDP ASSOCIATE check failed: %s" % exc, file=sys.stderr)
     raise SystemExit(1)
@@ -464,14 +468,7 @@ show_summary(){
   echo "------------------------------------------------------------"
 }
 
-main(){
-  need_root
-  load_env
-  choose_outbound
-  if ! precheck_gatevpn; then
-    err "已取消保存 GateVPN 配置。"
-    exit 1
-  fi
+apply_config(){
   backup_config
   case "$CORE" in
     mihomo) write_mihomo_config ;;
@@ -482,10 +479,23 @@ main(){
   if ! validate_written_config; then
     err "新配置验证失败，不会重启服务。"
     restore_config
-    exit 1
+    return 1
   fi
   write_outbound_env
   restart_service
+}
+
+main(){
+  need_root
+  load_env
+  choose_outbound
+  if ! precheck_gatevpn; then
+    err "已取消保存 GateVPN 配置。"
+    exit 1
+  fi
+  if ! apply_config; then
+    exit 1
+  fi
   show_summary
 }
 
