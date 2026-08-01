@@ -166,7 +166,7 @@ check_socks_summary() {
   OUTBOUND_TYPE="socks5"
   OUTBOUND_HOST="proxy.example"
   OUTBOUND_PORT="1080"
-  OUTBOUND_UDP=true
+  OUTBOUND_UDP=false
   OUTBOUND_USER="socks-user"
   OUTBOUND_PASS="socks-secret"
   show_summary > "$TMP_ROOT/socks-summary.txt"
