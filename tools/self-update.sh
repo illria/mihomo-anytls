@@ -38,19 +38,54 @@ download_install(){
   fi
 }
 
+replace_main_target(){
+  mv -f -- "$stage_main" "$BIN_MAIN"
+}
+replace_short_target(){
+  mv -f -- "$stage_short" "$BIN_SHORT"
+}
+after_main_replaced_hook(){
+  :
+}
+handle_update_signal(){
+  local code="$1"
+  if [ "${transaction_started:-false}" = true ] &&
+     [ "${transaction_committed:-false}" = false ] &&
+     [ "${transaction_rolled_back:-false}" = false ]; then
+    rollback_update || true
+  fi
+  exit "$code"
+}
 install_command() (
   local tmp="" stage_main="" stage_short="" backup_main="" backup_short=""
   local old_main=false old_short=false
+  local transaction_started=false transaction_committed=false
+  local transaction_rolled_back=false rollback_failed=false
   cleanup_update(){
     local f
-    for f in "$tmp" "$stage_main" "$stage_short" "$backup_main" "$backup_short"; do
+    if [ "$transaction_started" = true ] &&
+       [ "$transaction_committed" = false ] &&
+       [ "$transaction_rolled_back" = false ]; then
+      rollback_update || true
+    fi
+    for f in "$tmp" "$stage_main" "$stage_short"; do
       if [ -n "$f" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
         rm -f -- "$f"
       fi
     done
+    if [ "$rollback_failed" = false ]; then
+      for f in "$backup_main" "$backup_short"; do
+        if [ -n "$f" ] && { [ -e "$f" ] || [ -L "$f" ]; }; then
+          rm -f -- "$f"
+        fi
+      done
+    fi
   }
   rollback_update(){
     local ok=true
+    if [ "$transaction_rolled_back" = true ] || [ "$transaction_committed" = true ]; then
+      return 0
+    fi
     if [ "$old_main" = true ]; then
       [ -n "$backup_main" ] && mv -f -- "$backup_main" "$BIN_MAIN" || ok=false
     else
@@ -62,9 +97,11 @@ install_command() (
       rm -f -- "$BIN_SHORT" || ok=false
     fi
     if [ "$ok" = true ]; then
+      transaction_rolled_back=true
       info "更新失败，已恢复两个旧命令。"
     else
-      err "更新失败，且旧命令恢复失败，请立即检查: $BIN_MAIN $BIN_SHORT"
+      rollback_failed=true
+      err "高优先级: 更新回滚失败，备份已保留，请立即检查: $BIN_MAIN $BIN_SHORT"
     fi
     [ "$ok" = true ]
   }
@@ -96,7 +133,9 @@ install_command() (
     printf -v "$outvar" '%s' "$backup"
   }
   trap cleanup_update EXIT
-  trap 'exit 130' HUP INT TERM
+  trap 'handle_update_signal 129' HUP
+  trap 'handle_update_signal 130' INT
+  trap 'handle_update_signal 143' TERM
 
   if has flock; then
     mkdir -p "$(dirname "$LOCK_FILE")" || { err "无法创建更新锁目录。"; return 1; }
@@ -134,11 +173,16 @@ install_command() (
     err "无法保存旧命令状态，保留现有命令。"
     return 1
   fi
-  if ! mv -f -- "$stage_main" "$BIN_MAIN"; then
-    err "替换主命令失败，保留现有命令。"
+  transaction_started=true
+  if ! replace_main_target; then
+    rollback_update || true
     return 1
   fi
-  if ! mv -f -- "$stage_short" "$BIN_SHORT"; then
+  if ! after_main_replaced_hook; then
+    rollback_update || true
+    return 1
+  fi
+  if ! replace_short_target; then
     rollback_update || true
     return 1
   fi
@@ -147,6 +191,7 @@ install_command() (
     rollback_update || true
     return 1
   fi
+  transaction_committed=true
   info "已安装/更新主命令: $BIN_MAIN"
   info "已安装/更新快捷命令: $BIN_SHORT"
   info "以后可直接运行: en-mi"
@@ -177,7 +222,7 @@ install_cron_package(){
     apt) apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y cron ;;
     dnf) dnf install -y cronie ;;
     yum) yum install -y cronie ;;
-    apk) apk add --no-cache dcron ;;
+    apk) err "当前版本尚未实现 Alpine cron 后端。"; return 1 ;;
     pacman) pacman -Sy --noconfirm --needed cronie ;;
     zypper) zypper --non-interactive install cron ;;
     *) err "未识别包管理器，无法安装 cron。"; return 1 ;;
@@ -185,8 +230,12 @@ install_cron_package(){
 }
 
 ensure_cron_daemon(){
-  cron_daemon_present && return 0
   detect_pkg
+  if [ "$PKG_MANAGER" = apk ] || [ -f /etc/alpine-release ]; then
+    err "当前版本尚未实现 Alpine cron 后端，未启用每日自动更新。"
+    return 1
+  fi
+  cron_daemon_present && return 0
   install_cron_package || return 1
   cron_daemon_present || { err "cron 安装后仍未发现 cron/crond/cronie。"; return 1; }
 }
@@ -291,6 +340,37 @@ cron_file_valid(){
     cron_content_valid "$CRON_FILE"
 }
 
+rollback_cron_update(){
+  local ok=true
+  if [ "\${cron_transaction_rolled_back:-false}" = true ] ||
+     [ "\${cron_transaction_committed:-false}" = true ]; then
+    return 0
+  fi
+  if [ "$cron_old_exists" = true ]; then
+    [ -n "$cron_backup" ] && mv -f -- "$cron_backup" "$CRON_FILE" || ok=false
+  else
+    rm -f -- "$CRON_FILE" || ok=false
+  fi
+  if [ "$ok" = true ]; then
+    cron_transaction_rolled_back=true
+  else
+    cron_rollback_failed=true
+    err "高优先级: cron 回滚失败，备份已保留，请立即检查: $CRON_FILE"
+  fi
+  [ "$ok" = true ]
+}
+handle_cron_signal(){
+  local code="$1"
+  if [ "\${cron_transaction_started:-false}" = true ] &&
+     [ "\${cron_transaction_committed:-false}" = false ] &&
+     [ "\${cron_transaction_rolled_back:-false}" = false ]; then
+    rollback_cron_update || true
+  fi
+  exit "$code"
+}
+after_cron_replaced_hook(){
+  :
+}
 save_cron_backup(){
   local cron_dir="$1" outvar="$2" saved
   if [ ! -e "$CRON_FILE" ]; then
@@ -304,21 +384,27 @@ save_cron_backup(){
   fi
   printf -v "$outvar" '%s' "$saved"
 }
-restore_cron_backup(){
-  local backup="$1" existed="$2" ok=true
-  if [ "$existed" = true ]; then
-    [ -n "$backup" ] && mv -f -- "$backup" "$CRON_FILE" || ok=false
-  else
-    rm -f -- "$CRON_FILE" || ok=false
-  fi
-  if [ "$ok" = false ]; then
-    err "cron 旧配置恢复失败，请立即检查: $CRON_FILE"
-    return 1
-  fi
-  return 0
-}
-install_cron(){
-  local cron_dir="" backup="" old_cron=false
+install_cron() (
+  local cron_dir="" cron_backup="" cron_old_exists=false
+  local cron_transaction_started=false cron_transaction_committed=false
+  local cron_transaction_rolled_back=false cron_rollback_failed=false
+  cleanup_cron_transaction(){
+    if [ "$cron_transaction_started" = true ] &&
+       [ "$cron_transaction_committed" = false ] &&
+       [ "$cron_transaction_rolled_back" = false ]; then
+      rollback_cron_update || true
+    fi
+    if [ "$cron_rollback_failed" = false ] &&
+       [ -n "$cron_backup" ] &&
+       { [ -e "$cron_backup" ] || [ -L "$cron_backup" ]; }; then
+      rm -f -- "$cron_backup"
+    fi
+  }
+  trap cleanup_cron_transaction EXIT
+  trap 'handle_cron_signal 129' HUP
+  trap 'handle_cron_signal 130' INT
+  trap 'handle_cron_signal 143' TERM
+
   install_command || return 1
   ensure_cron_daemon || { err "无法安装 cron，未启用每日自动更新。"; return 1; }
   start_enable_cron || { err "无法启动或启用 cron，未启用每日自动更新。"; return 1; }
@@ -329,25 +415,31 @@ install_cron(){
     err "无法创建 cron 目录，未启用每日自动更新。"
     return 1
   fi
-  [ -e "$CRON_FILE" ] && old_cron=true
-  if ! save_cron_backup "$cron_dir" backup; then
+  [ -e "$CRON_FILE" ] && cron_old_exists=true
+  if ! save_cron_backup "$cron_dir" cron_backup; then
     err "无法保存旧 cron 配置，未启用每日自动更新。"
     return 1
   fi
+  cron_transaction_started=true
   if ! write_cron; then
-    [ -n "$backup" ] && rm -f -- "$backup"
+    rollback_cron_update || true
     err "写入 cron 失败，未启用每日自动更新。"
     return 1
   fi
+  if ! after_cron_replaced_hook; then
+    rollback_cron_update || true
+    return 1
+  fi
   if ! cron_file_valid || ! cron_daemon_running; then
-    restore_cron_backup "$backup" "$old_cron" || true
-    backup=""
+    rollback_cron_update || true
     err "cron 配置验证失败，已恢复旧配置，未启用每日自动更新。"
     return 1
   fi
-  [ -n "$backup" ] && rm -f -- "$backup"
+  cron_transaction_committed=true
+  [ -n "$cron_backup" ] && rm -f -- "$cron_backup"
+  cron_backup=""
   info "已启用每日自动更新: $CRON_FILE"
-}
+)
 
 remove_cron(){
   rm -f -- "$CRON_FILE"
@@ -360,11 +452,17 @@ next_schedule(){
 }
 
 status(){
-  local main_ok=false short_ok=false cron_exists=false cron_ok=false daemon_ok=false
+  local main_exists=false short_exists=false main_ok=false short_ok=false commands_match=false
+  local cron_exists=false cron_ok=false daemon_ok=false
   echo "主命令: $BIN_MAIN"
-  if [ -x "$BIN_MAIN" ]; then main_ok=true; echo "  已安装"; else echo "  未安装"; fi
+  if [ -e "$BIN_MAIN" ]; then main_exists=true; fi
+  if [ -x "$BIN_MAIN" ]; then main_ok=true; echo "  已安装且可执行"; else echo "  未安装或不可执行"; fi
   echo "快捷命令: $BIN_SHORT"
-  if [ -x "$BIN_SHORT" ]; then short_ok=true; echo "  已安装"; else echo "  未安装"; fi
+  if [ -e "$BIN_SHORT" ]; then short_exists=true; fi
+  if [ -x "$BIN_SHORT" ]; then short_ok=true; echo "  已安装且可执行"; else echo "  未安装或不可执行"; fi
+  if [ "$main_ok" = true ] && [ "$short_ok" = true ] && cmp -s "$BIN_MAIN" "$BIN_SHORT"; then
+    commands_match=true
+  fi
   echo "当前脚本版本: $SCRIPT_VERSION"
   echo "cron 文件: $CRON_FILE"
   if [ -e "$CRON_FILE" ]; then
@@ -383,10 +481,14 @@ status(){
     echo "下一次计划更新时间: 未设置"
   fi
   if cron_daemon_running; then daemon_ok=true; echo "cron daemon: 运行中"; else echo "cron daemon: 未运行"; fi
-  if [ "$cron_exists" = true ] && [ "$cron_ok" = false ]; then
-    echo "状态: cron 配置无效"
-  elif [ "$main_ok" = false ] && [ "$short_ok" = false ]; then
+  if [ "$main_exists" = false ] && [ "$short_exists" = false ]; then
     echo "状态: 未安装"
+  elif [ "$main_ok" = false ] || [ "$short_ok" = false ]; then
+    echo "状态: 命令安装不完整"
+  elif [ "$commands_match" = false ]; then
+    echo "状态: 两个管理命令版本不一致"
+  elif [ "$cron_exists" = true ] && [ "$cron_ok" = false ]; then
+    echo "状态: cron 配置无效"
   elif [ "$cron_exists" = false ]; then
     echo "状态: 命令已安装但 cron 未启用"
   elif [ "$daemon_ok" = false ]; then
