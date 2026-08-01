@@ -164,6 +164,7 @@ assert_file_contains 'old-short' "$BIN_SHORT"
 [ -s "$BACKUP_SEEN" ] || fail "signal hook did not see rollback backups"
 assert_no_update_temps
 unset -f after_main_replaced_hook
+after_main_replaced_hook(){ :; }
 
 # Success installs two identical executable commands.
 run_update
@@ -254,6 +255,7 @@ cmp -s "$OLD_CRON" "$CRON_FILE" || fail "signal cron update did not restore old 
 [ -s "$CRON_BACKUP_SEEN" ] || fail "cron signal hook did not see rollback backup"
 assert_no_update_temps
 unset -f after_cron_replaced_hook
+after_cron_replaced_hook(){ :; }
 
 # Status marks bad permissions and missing entrypoint as invalid.
 write_cron
