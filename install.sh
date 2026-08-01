@@ -94,24 +94,55 @@ download_file(){
   case "$url" in *\?*) sep="&" ;; esac
   busted="${url}${sep}t=$(date +%s)"
   if has curl; then
-    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
+    if ! curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"; then
+      echo "[ERR ] 下载失败: $url" >&2
+      rm -f -- "$out"
+      return 1
+    fi
   elif has wget; then
-    wget --no-cache -qO "$out" "$busted"
+    if ! wget --no-cache -qO "$out" "$busted"; then
+      echo "[ERR ] 下载失败: $url" >&2
+      rm -f -- "$out"
+      return 1
+    fi
   else
-    echo "缺少 curl/wget，请先安装其中一个。" >&2
-    exit 1
+    echo "[ERR ] 缺少 curl/wget，请先安装其中一个。" >&2
+    return 1
   fi
-  chmod +x "$out"
+  if [ ! -s "$out" ]; then
+    echo "[ERR ] 下载文件为空: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
+  if ! bash -n "$out"; then
+    echo "[ERR ] 下载脚本语法检查失败: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
+  if ! chmod 755 "$out"; then
+    echo "[ERR ] 无法设置下载脚本权限: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
 }
-
 
 stdin_is_interactive(){
   [ -t 0 ]
 }
+controlling_tty_available(){
+  [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null
+}
 execute_remote_script_interactive(){
   local file="$1"
   shift
-  bash "$file" "$@"
+  if stdin_is_interactive; then
+    bash "$file" "$@"
+  elif controlling_tty_available; then
+    bash "$file" "$@" </dev/tty
+  else
+    echo "[ERR ] 交互操作需要可用的 TTY。" >&2
+    return 1
+  fi
 }
 execute_remote_script_noninteractive(){
   local file="$1"
@@ -125,13 +156,7 @@ run_remote_script_interactive(){
   if ! download_file "$url" "$f"; then
     return 1
   fi
-  if stdin_is_interactive; then
-    execute_remote_script_interactive "$f" "$@"
-  elif [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null; then
-    execute_remote_script_interactive "$f" "$@"
-  else
-    execute_remote_script_noninteractive "$f" "$@"
-  fi
+  execute_remote_script_interactive "$f" "$@"
 }
 run_remote_script_noninteractive(){
   local url="$1" f
