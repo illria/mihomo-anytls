@@ -293,7 +293,7 @@ with conn:
         conn.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x00\x00")
     elif mode == "truncated":
         conn.sendall(b"\x05\x00")
-        else:
+    else:
         conn.sendall(b"\x05\x00\x00\x01\x7f\x00\x00\x01\x30\x39")
 PY
   MOCK_PID=$!
@@ -328,6 +328,8 @@ expect_check_failure() {
 expect_check_success
 expect_check_failure negotiation-fail
 expect_check_failure rep-fail
+expect_check_failure rsv-fail
+expect_check_failure zero-port
 expect_check_failure truncated
 
 REFUSED_PORT="$(python3 - <<'PY'
