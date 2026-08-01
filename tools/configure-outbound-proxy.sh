@@ -15,7 +15,6 @@ KEY_FILE=""
 INSTALL_MODE=""
 OUTBOUND_TYPE="direct"
 OUTBOUND_UDP="false"
-OUTBOUND_GATEVPN="false"
 OUTBOUND_HOST=""
 OUTBOUND_PORT=""
 OUTBOUND_USER=""
@@ -84,7 +83,6 @@ load_env(){
 
 choose_outbound(){
   local x auth udp_answer
-  OUTBOUND_GATEVPN=false
   OUTBOUND_USER=""
   OUTBOUND_PASS=""
   echo "当前节点: $CORE / $PROTOCOL / $DOMAIN:$PORT"
@@ -93,7 +91,6 @@ choose_outbound(){
   echo "  1) DIRECT 直连"
   echo "  2) HTTP/TCP 出口代理（不支持 UDP/WebRTC）"
   echo "  3) SOCKS5 出口代理"
-  echo "  4) GateVPN 本地 SOCKS5 UDP 出口（127.0.0.1:7928）"
   read -r -p "输入序号 [1]: " x
   x="${x:-1}"
 
@@ -121,23 +118,14 @@ choose_outbound(){
         *) OUTBOUND_UDP=false ;;
       esac
       ;;
-    4|gatevpn|GateVPN)
-      OUTBOUND_TYPE="socks5"
-      OUTBOUND_HOST="127.0.0.1"
-      OUTBOUND_PORT="7928"
-      OUTBOUND_UDP=true
-      OUTBOUND_GATEVPN=true
-      info "已选择 GateVPN 本地 SOCKS5 UDP 出口：127.0.0.1:7928"
-      ;;
+
     *) die "无效出口方式：$x" ;;
   esac
 
   if [ "$OUTBOUND_TYPE" != "direct" ]; then
     [ -n "$OUTBOUND_HOST" ] || die "代理地址不能为空。"
     [[ "$OUTBOUND_PORT" =~ ^[0-9]+$ ]] || die "代理端口必须是数字。"
-    if [ "$OUTBOUND_TYPE" = "http" ] || {
-      [ "$OUTBOUND_TYPE" = "socks5" ] && [ "$OUTBOUND_GATEVPN" != true ]
-    }; then
+    if [ "$OUTBOUND_TYPE" = "http" ] || [ "$OUTBOUND_TYPE" = "socks5" ]; then
       read -r -p "是否需要用户名密码认证？[y/N]: " auth
       auth="${auth:-n}"
       case "$auth" in
@@ -196,29 +184,11 @@ try:
         if bnd_port == 0:
             raise RuntimeError("UDP ASSOCIATE returned port 0")
 except Exception as exc:
-    print("GateVPN SOCKS5 UDP ASSOCIATE check failed: %s" % exc, file=sys.stderr)
+    print("SOCKS5 UDP ASSOCIATE check failed: %s" % exc, file=sys.stderr)
     raise SystemExit(1)
 PY
 }
 
-precheck_gatevpn(){
-  [ "$OUTBOUND_GATEVPN" = true ] || return 0
-  if check_socks5_udp_associate "$OUTBOUND_HOST" "$OUTBOUND_PORT"; then
-    info "GateVPN SOCKS5 UDP ASSOCIATE 预检查通过。"
-    return 0
-  fi
-  err "GateVPN SOCKS5 UDP ASSOCIATE 不可用。"
-  err "请确认 gatevpn PR #2 已合并、服务已更新，并且 127.0.0.1:7928 正常监听。"
-  local answer
-  read -r -p "是否仍保存配置？[y/N]: " answer
-  case "$answer" in
-    y|Y|yes|YES)
-      warn "将保留 GateVPN SOCKS5 UDP 配置，不会自动切换到 HTTP 或 DIRECT。"
-      return 0
-      ;;
-    *) return 1 ;;
-  esac
-}
 
 backup_config(){
   BACKUP_CONFIG=""
@@ -452,11 +422,6 @@ show_summary(){
     else
       echo "SOCKS5 UDP: 已禁用"
     fi
-    if [ "$OUTBOUND_GATEVPN" = true ]; then
-      echo "GateVPN 模式: 是"
-    else
-      echo "GateVPN 模式: 否"
-    fi
     echo "UDP 回退 DIRECT: 禁止"
   elif [ "$OUTBOUND_TYPE" = "http" ]; then
     echo "出口代理: $OUTBOUND_HOST:$OUTBOUND_PORT"
@@ -489,10 +454,6 @@ main(){
   need_root
   load_env
   choose_outbound
-  if ! precheck_gatevpn; then
-    err "已取消保存 GateVPN 配置。"
-    exit 1
-  fi
   if ! apply_config; then
     exit 1
   fi
