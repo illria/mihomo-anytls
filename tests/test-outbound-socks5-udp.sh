@@ -48,6 +48,16 @@ assert_not_contains() {
   fi
 }
 
+assert_line_before() {
+  local first second file
+  first="$(grep -nF "$1" "$3" | head -n1 | cut -d: -f1 || true)"
+  second="$(grep -nF "$2" "$3" | head -n1 | cut -d: -f1 || true)"
+  [ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ] || {
+    echo "expected '$1' before '$2' in $3" >&2
+    exit 1
+  }
+}
+
 write_mihomo_case() {
   local name="$1"
   CONFIG_FILE="$TMP_ROOT/$name.yaml"
@@ -107,6 +117,35 @@ INPUT
 choose_outbound_http_no_auth
 choose_outbound_http_auth
 choose_outbound_socks_auth
+
+choose_outbound_socks_default_udp() {
+  set_common
+  choose_outbound <<'INPUT'
+3
+proxy.example
+1080
+
+n
+INPUT
+  [ "$OUTBOUND_TYPE" = "socks5" ]
+  [ "$OUTBOUND_UDP" = true ]
+}
+
+choose_outbound_socks_udp_disabled() {
+  set_common
+  choose_outbound <<'INPUT'
+3
+proxy.example
+1080
+n
+n
+INPUT
+  [ "$OUTBOUND_TYPE" = "socks5" ]
+  [ "$OUTBOUND_UDP" = false ]
+}
+
+choose_outbound_socks_default_udp
+choose_outbound_socks_udp_disabled
 check_http_summary() {
   set_common
   OUTBOUND_TYPE="http"
@@ -116,6 +155,9 @@ check_http_summary() {
   OUTBOUND_PASS="http-secret"
   show_summary > "$TMP_ROOT/http-summary.txt"
   assert_contains '出口认证: http-user / ******' "$TMP_ROOT/http-summary.txt"
+  assert_contains 'UDP 支持: 不支持' "$TMP_ROOT/http-summary.txt"
+  assert_contains 'UDP 处理: REJECT' "$TMP_ROOT/http-summary.txt"
+  assert_contains 'WebRTC/STUN: 将被拒绝，不会回退 DIRECT' "$TMP_ROOT/http-summary.txt"
   assert_not_contains 'http-secret' "$TMP_ROOT/http-summary.txt"
 }
 
@@ -129,11 +171,29 @@ check_socks_summary() {
   OUTBOUND_PASS="socks-secret"
   show_summary > "$TMP_ROOT/socks-summary.txt"
   assert_contains '出口认证: socks-user / ******' "$TMP_ROOT/socks-summary.txt"
+  assert_contains 'SOCKS5 UDP: 已禁用' "$TMP_ROOT/socks-summary.txt"
+  assert_contains 'UDP 处理: REJECT' "$TMP_ROOT/socks-summary.txt"
+  assert_contains 'UDP 回退 DIRECT: 禁止' "$TMP_ROOT/socks-summary.txt"
   assert_not_contains 'socks-secret' "$TMP_ROOT/socks-summary.txt"
 }
 
 check_http_summary
 check_socks_summary
+
+check_socks_udp_summary() {
+  set_common
+  OUTBOUND_TYPE="socks5"
+  OUTBOUND_HOST="proxy.example"
+  OUTBOUND_PORT="1080"
+  OUTBOUND_UDP=true
+  show_summary > "$TMP_ROOT/socks-udp-summary.txt"
+  assert_contains 'SOCKS5 UDP: 已启用' "$TMP_ROOT/socks-udp-summary.txt"
+  assert_contains 'UDP 出口: upstream-out' "$TMP_ROOT/socks-udp-summary.txt"
+  assert_contains '未配置 UDP DIRECT 回退' "$TMP_ROOT/socks-udp-summary.txt"
+  assert_not_contains 'UDP 处理: REJECT' "$TMP_ROOT/socks-udp-summary.txt"
+}
+
+check_socks_udp_summary
 
 set_common
 OUTBOUND_TYPE="socks5"
@@ -163,6 +223,9 @@ OUTBOUND_PORT="1080"
 OUTBOUND_UDP=false
 write_mihomo_case socks5-tcp
 assert_contains 'udp: false' "$CONFIG_FILE"
+assert_contains 'NETWORK,UDP,REJECT' "$CONFIG_FILE"
+assert_line_before 'NETWORK,UDP,REJECT' 'MATCH,upstream-out' "$CONFIG_FILE"
+assert_not_contains 'NETWORK,UDP,DIRECT' "$CONFIG_FILE"
 assert_not_contains 'udp: true' "$CONFIG_FILE"
 
 set_common
@@ -174,6 +237,8 @@ write_mihomo_case http
 assert_contains 'type: http' "$CONFIG_FILE"
 assert_not_contains 'type: socks5' "$CONFIG_FILE"
 assert_not_contains 'udp: true' "$CONFIG_FILE"
+assert_contains 'NETWORK,UDP,REJECT' "$CONFIG_FILE"
+assert_line_before 'NETWORK,UDP,REJECT' 'MATCH,upstream-out' "$CONFIG_FILE"
 assert_not_contains 'NETWORK,UDP,DIRECT' "$CONFIG_FILE"
 assert_contains '  - MATCH,upstream-out' "$CONFIG_FILE"
 
