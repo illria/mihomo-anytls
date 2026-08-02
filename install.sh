@@ -177,7 +177,7 @@ run_remote_script(){
 }
 
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
-show_nodes(){ run_remote_script "$SHOW_URL"; }
+show_nodes(){ run_remote_script_noninteractive "$SHOW_URL"; }
 install_nginx_site(){ run_remote_script "$NGINX_URL"; }
 ssl_manager(){ run_remote_script "$SSL_MANAGER_URL" "$@"; }
 manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
