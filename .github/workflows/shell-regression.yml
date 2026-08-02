@@ -17,6 +17,10 @@ jobs:
           bash -n tools/configure-outbound-proxy.sh
       - name: Check config writer dispatch
         run: bash tests/test-installer-config-writer.sh
+      - name: Validate self-update syntax
+        run: bash -n tools/self-update.sh
+      - name: Check self-update behavior
+        run: bash tests/test-self-update.sh
       - name: Check entrypoint wrapper
         run: bash tests/test-entrypoint-wrapper.sh
       - name: Check custom certificate path handling

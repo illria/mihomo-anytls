@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-INSTALLER_VERSION="2026-08-01-eianun-en-mi-v4"
+INSTALLER_VERSION="2026-08-02-eianun-en-mi-v5"
 AUTHOR="Eianun"
 BASE_URL="https://raw.githubusercontent.com/illria/mihomo-anytls/main"
 MAIN_URL="$BASE_URL/mihomo-anytls-install.sh"
@@ -94,45 +94,96 @@ download_file(){
   case "$url" in *\?*) sep="&" ;; esac
   busted="${url}${sep}t=$(date +%s)"
   if has curl; then
-    curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"
+    if ! curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$busted" -o "$out"; then
+      echo "[ERR ] 下载失败: $url" >&2
+      rm -f -- "$out"
+      return 1
+    fi
   elif has wget; then
-    wget --no-cache -qO "$out" "$busted"
+    if ! wget --no-cache -qO "$out" "$busted"; then
+      echo "[ERR ] 下载失败: $url" >&2
+      rm -f -- "$out"
+      return 1
+    fi
   else
-    echo "缺少 curl/wget，请先安装其中一个。" >&2
-    exit 1
+    echo "[ERR ] 缺少 curl/wget，请先安装其中一个。" >&2
+    return 1
   fi
-  chmod +x "$out"
+  if [ ! -s "$out" ]; then
+    echo "[ERR ] 下载文件为空: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
+  if ! bash -n "$out"; then
+    echo "[ERR ] 下载脚本语法检查失败: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
+  if ! chmod 755 "$out"; then
+    echo "[ERR ] 无法设置下载脚本权限: $out" >&2
+    rm -f -- "$out"
+    return 1
+  fi
 }
 
-install_shortcuts(){
-  local tmp
-  [ -w /usr/local/bin ] || return 0
-  tmp="$(make_tmp)"
-  if download_file "$BASE_URL/install.sh" "$tmp" >/dev/null 2>&1; then
-    install -m 755 "$tmp" "$BIN_MAIN" 2>/dev/null || true
-    install -m 755 "$tmp" "$BIN_SHORT" 2>/dev/null || true
+stdin_is_interactive(){
+  [ -t 0 ]
+}
+controlling_tty_available(){
+  [ -r /dev/tty ] && [ -w /dev/tty ] && { : </dev/tty; } 2>/dev/null
+}
+execute_remote_script_interactive(){
+  local file="$1"
+  shift
+  if stdin_is_interactive; then
+    bash "$file" "$@"
+  elif controlling_tty_available; then
+    execute_remote_script_from_tty "$file" "$@"
+  else
+    echo "[ERR ] 交互操作需要可用的 TTY。" >&2
+    return 1
   fi
 }
-
-run_remote_script(){
+execute_remote_script_from_tty(){
+  local file="$1"
+  shift
+  bash "$file" "$@" </dev/tty
+}
+execute_remote_script_noninteractive(){
+  local file="$1"
+  shift
+  bash "$file" "$@" </dev/null
+}
+run_remote_script_interactive(){
   local url="$1" f
   shift || true
   f="$(make_tmp)"
-  download_file "$url" "$f"
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    bash "$f" "$@" < /dev/tty
-  else
-    bash "$f" "$@"
+  if ! download_file "$url" "$f"; then
+    return 1
   fi
+  execute_remote_script_interactive "$f" "$@"
+}
+run_remote_script_noninteractive(){
+  local url="$1" f
+  shift || true
+  f="$(make_tmp)"
+  if ! download_file "$url" "$f"; then
+    return 1
+  fi
+  execute_remote_script_noninteractive "$f" "$@"
+}
+run_remote_script(){
+  run_remote_script_interactive "$@"
 }
 
 install_or_update_node(){ ensure_crontab || true; run_remote_script "$MAIN_URL"; }
-show_nodes(){ run_remote_script "$SHOW_URL"; }
+show_nodes(){ run_remote_script_noninteractive "$SHOW_URL"; }
 install_nginx_site(){ run_remote_script "$NGINX_URL"; }
 ssl_manager(){ run_remote_script "$SSL_MANAGER_URL" "$@"; }
 manage_cert_pool(){ run_remote_script "$CERT_POOL_URL"; }
 configure_outbound(){ run_remote_script "$OUTBOUND_URL"; }
 manage_self_update(){ run_remote_script "$SELF_UPDATE_URL"; }
+run_self_update_once(){ run_remote_script_noninteractive "$SELF_UPDATE_URL" run-update; }
 uninstall_tool(){ run_remote_script "$UNINSTALL_URL"; }
 
 repair_local_cert(){
@@ -286,7 +337,12 @@ menu(){
 
 main(){
   need_root
-  install_shortcuts || true
+  case "${1:-}" in
+    --self-update-run|self-update-run)
+      run_self_update_once
+      return
+      ;;
+  esac
   case "${1:-}" in
     --install|install|node) install_or_update_node ;;
     --show|show|list) show_nodes ;;
